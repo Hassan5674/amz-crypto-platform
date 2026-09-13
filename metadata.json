@@ -1,0 +1,6 @@
+{
+  "name": "AMZDistributor - Enterprise Commerce, Logistics & Multi-Asset Finance Platform",
+  "description": "AMZDistributor is an institutional digital platform for enterprise commerce, distribution logistics, and multi-asset treasury settlement.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

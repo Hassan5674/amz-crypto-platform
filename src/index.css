@@ -1,0 +1,27 @@
+@import "tailwindcss";
+
+html, body, #root {
+  min-height: 100vh;
+  background-color: #020617;
+  color: #f8fafc;
+  color-scheme: dark;
+}
+
+@keyframes fly-coin {
+  0% {
+    transform: translate(0, 0) scale(1) rotate(0deg);
+    opacity: 1;
+  }
+  50% {
+    transform: translate(var(--fly-x-mid), var(--fly-y-mid)) scale(1.3) rotate(360deg);
+    opacity: 0.95;
+  }
+  100% {
+    transform: translate(var(--fly-x-end), var(--fly-y-end)) scale(0.6) rotate(720deg);
+    opacity: 0;
+  }
+}
+
+.animate-fly-coin {
+  animation: fly-coin 0.9s cubic-bezier(0.25, 1, 0.5, 1) forwards;
+}
