@@ -50,16 +50,19 @@ class EmailService {
         });
       } else {
         this.transporter = nodemailer.createTransport({
-          host: smtpHost || 'smtp.gmail.com',
+          host: smtpHost || 'smtp.hostinger.com',
           port: smtpPort,
           secure: smtpPort === 465,
           auth: {
             user: smtpUser,
             pass: smtpPass
           },
-          connectionTimeout: 5000,
-          greetingTimeout: 5000,
-          socketTimeout: 5000
+          tls: {
+            rejectUnauthorized: false
+          },
+          connectionTimeout: 8000,
+          greetingTimeout: 8000,
+          socketTimeout: 8000
         });
       }
       this.isConfigured = true;
