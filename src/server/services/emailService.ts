@@ -26,17 +26,17 @@ class EmailService {
   }
 
   private initTransporter(): void {
-    const smtpHost = process.env.SMTP_HOST;
-    const smtpPort = parseInt(process.env.SMTP_PORT || '587', 10);
-    const smtpUser = (process.env.SMTP_USER || process.env.GMAIL_USER || '').trim();
-    let smtpPass = (process.env.SMTP_PASS || process.env.GMAIL_APP_PASSWORD || '').trim();
+    const smtpHost = (process.env.SMTP_HOST || 'smtp.hostinger.com').trim();
+    const smtpPort = parseInt(process.env.SMTP_PORT || '465', 10);
+    const smtpUser = (process.env.SMTP_USER || process.env.GMAIL_USER || 'noreply@amzdistributor.com').trim();
+    let smtpPass = (process.env.SMTP_PASS || process.env.GMAIL_APP_PASSWORD || 'Alihayder888@').trim();
 
     if (smtpPass) {
       smtpPass = smtpPass.replace(/\s+/g, '');
     }
 
     if (smtpUser && smtpPass) {
-      if (smtpUser.toLowerCase().includes('@gmail.com') || (!smtpHost && !process.env.SMTP_HOST)) {
+      if (smtpUser.toLowerCase().includes('@gmail.com') && !smtpHost.includes('hostinger')) {
         // Direct Gmail preset with full SSL/TLS support
         this.transporter = nodemailer.createTransport({
           service: 'gmail',
@@ -44,13 +44,13 @@ class EmailService {
             user: smtpUser,
             pass: smtpPass
           },
-          connectionTimeout: 5000,
-          greetingTimeout: 5000,
-          socketTimeout: 5000
+          connectionTimeout: 8000,
+          greetingTimeout: 8000,
+          socketTimeout: 8000
         });
       } else {
         this.transporter = nodemailer.createTransport({
-          host: smtpHost || 'smtp.hostinger.com',
+          host: smtpHost,
           port: smtpPort,
           secure: smtpPort === 465,
           auth: {
@@ -66,7 +66,7 @@ class EmailService {
         });
       }
       this.isConfigured = true;
-      logger.info('EMAIL', `SMTP Transporter initialized for ${smtpUser} via ${smtpHost || 'smtp.hostinger.com'}:${smtpPort}`);
+      logger.info('EMAIL', `SMTP Transporter initialized for ${smtpUser} via ${smtpHost}:${smtpPort}`);
       // Verify transporter connectivity non-blockingly
       this.transporter.verify((error: any) => {
         if (error) {
@@ -77,14 +77,14 @@ class EmailService {
       });
     } else {
       this.isConfigured = false;
-      logger.info('EMAIL', 'No SMTP credentials detected (SMTP_USER / SMTP_PASS). Ready to receive live credentials.');
+      logger.info('EMAIL', 'No SMTP credentials detected.');
     }
   }
 
   private getSender(): string {
     return (
       process.env.EMAIL_FROM ||
-      (process.env.SMTP_USER ? `AMZDistributor Security <${process.env.SMTP_USER}>` : 'AMZDistributor <no-reply@amzdistributor.com>')
+      `"AMZDistributor Security" <${(process.env.SMTP_USER || 'noreply@amzdistributor.com').trim()}>`
     );
   }
 
