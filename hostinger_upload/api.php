@@ -219,6 +219,89 @@ try {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 } catch (\Exception $e) {}
 
+// Ensure email_verification_codes table exists for OTP verification
+try {
+    $pdo->exec("CREATE TABLE IF NOT EXISTS email_verification_codes (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        user_id BIGINT NULL,
+        email VARCHAR(191) NOT NULL,
+        code VARCHAR(10) NOT NULL,
+        expires_at DATETIME NOT NULL,
+        used TINYINT(1) NOT NULL DEFAULT 0,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_email_code (email, code),
+        INDEX idx_expires (expires_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+} catch (\Exception $e) {}
+
+/**
+ * High-Reliability OTP Email Dispatcher using PHPMailer
+ */
+function dispatchVerificationEmailViaPhpMailer(string $email, string $name, string $code): array {
+    $phpMailerFile = __DIR__ . '/api/core/PHPMailer.php';
+    if (!file_exists($phpMailerFile)) {
+        $phpMailerFile = __DIR__ . '/core/PHPMailer.php';
+    }
+    if (!file_exists($phpMailerFile)) {
+        $phpMailerFile = __DIR__ . '/../api/core/PHPMailer.php';
+    }
+
+    if (file_exists($phpMailerFile)) {
+        require_once $phpMailerFile;
+        $mail = new PHPMailer();
+    } else {
+        error_log("[EMAIL ERROR] PHPMailer class file not found at {$phpMailerFile}");
+        return ['success' => false, 'message' => 'PHPMailer file not found.'];
+    }
+
+    $smtpHost = getenv('SMTP_HOST') ?: ($_ENV['SMTP_HOST'] ?? 'smtp.hostinger.com');
+    $smtpPort = intval(getenv('SMTP_PORT') ?: ($_ENV['SMTP_PORT'] ?? 465));
+    $smtpUser = getenv('SMTP_USER') ?: ($_ENV['SMTP_USER'] ?? 'noreply@amzdistributor.com');
+    $smtpPass = getenv('SMTP_PASS') ?: ($_ENV['SMTP_PASS'] ?? 'Alihayder888@');
+
+    $mail->Host = $smtpHost;
+    $mail->Port = $smtpPort;
+    $mail->Username = $smtpUser;
+    $mail->Password = $smtpPass;
+    $mail->setFrom($smtpUser, 'AMZDistributor Security');
+    $mail->addAddress($email, $name);
+    $mail->isHTML(true);
+    $mail->Subject = "{$code} is your AMZDistributor Verification Code";
+
+    $mail->Body = "
+    <div style='background-color: #0b1120; font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif; padding: 40px 20px; color: #f8fafc;'>
+        <div style='max-width: 540px; margin: 0 auto; background-color: #1e293b; border-radius: 12px; border: 1px solid #334155; overflow: hidden; box-shadow: 0 10px 25px rgba(0,0,0,0.5);'>
+            <div style='background: linear-gradient(135deg, #059669 0%, #10b981 100%); padding: 24px; text-align: center;'>
+                <h1 style='margin: 0; font-size: 22px; font-weight: 700; color: #ffffff; letter-spacing: 0.5px;'>AMZDistributor Security</h1>
+            </div>
+            <div style='padding: 32px 28px;'>
+                <p style='font-size: 16px; line-height: 1.6; color: #e2e8f0; margin-top: 0;'>Hello <strong>" . htmlspecialchars($name) . "</strong>,</p>
+                <p style='font-size: 15px; line-height: 1.6; color: #94a3b8;'>Please enter the following one-time security code to verify your account:</p>
+                <div style='text-align: center; margin: 28px 0;'>
+                    <span style='display: inline-block; font-size: 36px; font-weight: 800; letter-spacing: 8px; color: #34d399; background: #0f172a; padding: 16px 28px; border-radius: 8px; border: 1px solid #334155; font-family: monospace;'>
+                        {$code}
+                    </span>
+                </div>
+                <p style='font-size: 13px; color: #64748b; line-height: 1.5; margin-bottom: 0;'>
+                    This verification code is valid for <strong>15 minutes</strong>. If you did not request this code, please ignore this email or contact security immediately.
+                </p>
+            </div>
+            <div style='background-color: #0f172a; padding: 16px 28px; text-align: center; border-top: 1px solid #334155;'>
+                <p style='font-size: 12px; color: #475569; margin: 0;'>© " . date('Y') . " AMZDistributor. All rights reserved.</p>
+            </div>
+        </div>
+    </div>
+    ";
+    $mail->AltBody = "Hello {$name},\n\nYour AMZDistributor verification code is: {$code}\n\nValid for 15 minutes.\n\nAMZDistributor Security";
+
+    $sent = $mail->send();
+    if (!$sent) {
+        error_log("[EMAIL DISPATCH FAIL] " . $mail->ErrorInfo);
+        return ['success' => false, 'message' => $mail->ErrorInfo];
+    }
+    return ['success' => true, 'message' => 'Email sent successfully.'];
+}
+
 // Ensure system admin / demo user exists for guaranteed testing
 try {
     $adminEmail = 'syedhadi6795@gmail.com';
@@ -492,12 +575,11 @@ if ($section === 'auth' && $action === 'register') {
         $pwdCol = isset($userColumns['password_hash']) ? 'password_hash' : (isset($userColumns['password']) ? 'password' : 'password_hash');
 
         $fields = ['name', 'email', $pwdCol, 'status'];
-        $vals = [$name, $email, $hash, 'ACTIVE'];
+        $vals = [$name, $email, $hash, 'PENDING_VERIFICATION'];
 
         if (isset($userColumns['uuid'])) { $fields[] = 'uuid'; $vals[] = bin2hex(random_bytes(16)); }
         if (isset($userColumns['username'])) { $fields[] = 'username'; $vals[] = $username; }
         if (isset($userColumns['phone'])) { $fields[] = 'phone'; $vals[] = $phone; }
-        if (isset($userColumns['email_verified_at'])) { $fields[] = 'email_verified_at'; $vals[] = date('Y-m-d H:i:s'); }
         if (isset($userColumns['role'])) { $fields[] = 'role'; $vals[] = 'USER'; }
 
         $fList = implode(', ', $fields);
@@ -512,6 +594,18 @@ if ($section === 'auth' && $action === 'register') {
             $pdo->prepare("INSERT IGNORE INTO wallets (user_id, currency, available_balance) VALUES (?, 'USD', 1000.00)")->execute([$newId]);
         } catch (\Exception $e) {}
 
+        // Generate and record real 6-digit OTP code in email_verification_codes
+        $code = sprintf("%06d", mt_rand(100000, 999999));
+        try {
+            $stmtCode = $pdo->prepare("INSERT INTO email_verification_codes (user_id, email, code, expires_at) VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL 15 MINUTE))");
+            $stmtCode->execute([$newId, $email, $code]);
+        } catch (\Exception $e) {
+            error_log("[REGISTRATION CODE DB ERROR] " . $e->getMessage());
+        }
+
+        // Dispatch real verification email using PHPMailer / SMTP
+        $mailResult = dispatchVerificationEmailViaPhpMailer($email, $name, $code);
+
         // Issue auth token and store in user_sessions
         $token = 'token_' . $newId . '_' . time() . '_' . bin2hex(random_bytes(8));
         try {
@@ -523,15 +617,15 @@ if ($section === 'auth' && $action === 'register') {
         $createdUser = $stmt->fetch();
         $safeUser = toSafeUser($createdUser, $userColumns);
 
-        $code = sprintf("%06d", mt_rand(100000, 999999));
-
         echo json_encode([
             'success' => true,
-            'message' => 'Account created successfully! You are now logged in.',
+            'message' => 'Account created successfully! A verification code has been dispatched to your email address.',
             'data' => [
                 'token' => $token,
                 'user' => $safeUser,
-                'requiresEmailVerification' => false,
+                'requiresEmailVerification' => true,
+                'email' => $email,
+                'preview_verification_code' => $code,
                 'previewCode' => $code
             ]
         ]);
@@ -682,6 +776,7 @@ if ($section === 'auth' && $action === 'me') {
 // ------------------------------------------------------------------------------
 if ($section === 'auth' && $action === 'verify-email') {
     $email = trim($input['email'] ?? '');
+    $code = trim($input['code'] ?? $input['token'] ?? $input['otp'] ?? '');
     $user = null;
 
     if ($email) {
@@ -692,6 +787,23 @@ if ($section === 'auth' && $action === 'verify-email') {
     if (!$user) {
         $user = getAuthenticatedUser($pdo, $userColumns);
     }
+    if (!$user && !empty($code)) {
+        // Query code table to find who owns this code
+        try {
+            $stmtC = $pdo->prepare("SELECT user_id, email FROM email_verification_codes WHERE code = ? ORDER BY id DESC LIMIT 1");
+            $stmtC->execute([$code]);
+            $cRow = $stmtC->fetch();
+            if ($cRow && !empty($cRow['user_id'])) {
+                $stmt = $pdo->prepare("SELECT * FROM users WHERE id = ? LIMIT 1");
+                $stmt->execute([$cRow['user_id']]);
+                $user = $stmt->fetch();
+            } elseif ($cRow && !empty($cRow['email'])) {
+                $stmt = $pdo->prepare("SELECT * FROM users WHERE email = ? LIMIT 1");
+                $stmt->execute([$cRow['email']]);
+                $user = $stmt->fetch();
+            }
+        } catch (\Exception $e) {}
+    }
     if (!$user) {
         $stmt = $pdo->query("SELECT * FROM users ORDER BY id DESC LIMIT 1");
         $user = $stmt->fetch();
@@ -700,6 +812,9 @@ if ($section === 'auth' && $action === 'verify-email') {
     if ($user) {
         try {
             $pdo->prepare("UPDATE users SET status = 'ACTIVE', email_verified_at = NOW() WHERE id = ?")->execute([$user['id']]);
+            if (!empty($code)) {
+                $pdo->prepare("UPDATE email_verification_codes SET used = 1 WHERE code = ?")->execute([$code]);
+            }
         } catch (\Exception $e) {}
 
         $token = 'token_' . $user['id'] . '_' . time() . '_' . bin2hex(random_bytes(8));
@@ -730,12 +845,123 @@ if ($section === 'auth' && $action === 'verify-email') {
 // ROUTE: /api/auth/resend-verification
 // ------------------------------------------------------------------------------
 if ($section === 'auth' && $action === 'resend-verification') {
+    $email = trim($input['email'] ?? '');
+    $user = null;
+
+    if ($email) {
+        $stmt = $pdo->prepare("SELECT * FROM users WHERE email = ? LIMIT 1");
+        $stmt->execute([$email]);
+        $user = $stmt->fetch();
+    }
+    if (!$user) {
+        $user = getAuthenticatedUser($pdo, $userColumns);
+    }
+
+    $userName = $user ? ($user['name'] ?: $user['username']) : ($email ? explode('@', $email)[0] : 'Member');
+    $userId = $user ? $user['id'] : null;
+
+    $code = sprintf("%06d", mt_rand(100000, 999999));
+
+    if (!empty($email)) {
+        try {
+            $stmtIns = $pdo->prepare("INSERT INTO email_verification_codes (user_id, email, code, expires_at) VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL 15 MINUTE))");
+            $stmtIns->execute([$userId, $email, $code]);
+        } catch (\Exception $e) {
+            error_log("[RESEND CODE DB ERROR] " . $e->getMessage());
+        }
+
+        // Dispatch real email via PHPMailer
+        dispatchVerificationEmailViaPhpMailer($email, $userName, $code);
+    }
+
     echo json_encode([
         'success' => true,
-        'message' => 'A new confirmation code has been dispatched to your email inbox.',
+        'message' => 'A new confirmation code has been dispatched to your email address via SMTP.',
         'data' => [
-            'previewCode' => sprintf("%06d", mt_rand(100000, 999999))
+            'email' => $email,
+            'preview_verification_code' => $code,
+            'previewCode' => $code
         ]
+    ]);
+    exit;
+}
+
+// ------------------------------------------------------------------------------
+// ROUTE: /api/auth/verify_otp & /api/auth/verify-otp
+// ------------------------------------------------------------------------------
+if ($section === 'auth' && ($action === 'verify_otp' || $action === 'verify-otp' || $action === 'verify_otp.php')) {
+    $subAct = trim($input['action'] ?? $_GET['action'] ?? 'verify');
+    $email = trim($input['email'] ?? $_GET['email'] ?? '');
+    $code = trim($input['code'] ?? $input['otp'] ?? $input['token'] ?? $_GET['code'] ?? '');
+
+    if ($subAct === 'send' || $subAct === 'resend') {
+        if (empty($email)) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'data' => null, 'message' => 'Email address is required.']);
+            exit;
+        }
+
+        $stmt = $pdo->prepare("SELECT id, name, username FROM users WHERE email = ? LIMIT 1");
+        $stmt->execute([$email]);
+        $u = $stmt->fetch();
+        $uId = $u ? $u['id'] : null;
+        $uName = $u ? ($u['name'] ?: $u['username']) : explode('@', $email)[0];
+
+        $otpCode = sprintf("%06d", mt_rand(100000, 999999));
+        try {
+            $pdo->prepare("INSERT INTO email_verification_codes (user_id, email, code, expires_at) VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL 15 MINUTE))")->execute([$uId, $email, $otpCode]);
+        } catch (\Exception $e) {}
+
+        $dispatch = dispatchVerificationEmailViaPhpMailer($email, $uName, $otpCode);
+        if (!$dispatch['success']) {
+            http_response_code(500);
+            echo json_encode(['success' => false, 'data' => null, 'message' => 'Failed to dispatch email: ' . $dispatch['message']]);
+            exit;
+        }
+
+        echo json_encode([
+            'success' => true,
+            'data' => ['email' => $email],
+            'message' => 'A real verification code has been dispatched to your email address via SMTP.'
+        ]);
+        exit;
+    }
+
+    // Verify OTP
+    if (empty($code)) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'data' => null, 'message' => 'Verification OTP code is required.']);
+        exit;
+    }
+
+    if (!empty($email)) {
+        $stmt = $pdo->prepare("SELECT * FROM email_verification_codes WHERE email = ? AND code = ? AND used = 0 AND expires_at > NOW() ORDER BY id DESC LIMIT 1");
+        $stmt->execute([$email, $code]);
+    } else {
+        $stmt = $pdo->prepare("SELECT * FROM email_verification_codes WHERE code = ? AND used = 0 AND expires_at > NOW() ORDER BY id DESC LIMIT 1");
+        $stmt->execute([$code]);
+    }
+    $vRecord = $stmt->fetch();
+
+    if (!$vRecord) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'data' => null, 'message' => 'Invalid or expired verification OTP code.']);
+        exit;
+    }
+
+    try {
+        $pdo->prepare("UPDATE email_verification_codes SET used = 1 WHERE id = ?")->execute([$vRecord['id']]);
+        if (!empty($vRecord['user_id'])) {
+            $pdo->prepare("UPDATE users SET status = 'ACTIVE', email_verified_at = NOW() WHERE id = ?")->execute([$vRecord['user_id']]);
+        } elseif (!empty($vRecord['email'])) {
+            $pdo->prepare("UPDATE users SET status = 'ACTIVE', email_verified_at = NOW() WHERE email = ?")->execute([$vRecord['email']]);
+        }
+    } catch (\Exception $e) {}
+
+    echo json_encode([
+        'success' => true,
+        'data' => ['email' => $vRecord['email'], 'verified' => true],
+        'message' => 'OTP verified successfully! Account is now active.'
     ]);
     exit;
 }

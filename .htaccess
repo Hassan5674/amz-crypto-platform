@@ -2,14 +2,22 @@
     RewriteEngine On
     RewriteBase /
 
-    # Allow direct access to existing files and directories (like /assets/*)
-    RewriteCond %{REQUEST_FILENAME} -f [OR]
+    # Ensure Authorization header is passed to PHP scripts on shared hosting
+    SetEnvIf Authorization "(.*)" HTTP_AUTHORIZATION=$1
+    RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+    # 1. Allow direct access to real existing files (e.g. /api/auth/verify_otp.php, /assets/*, favicon.ico)
+    RewriteCond %{REQUEST_FILENAME} -f
+    RewriteRule ^ - [L]
+
+    # 2. Route extensionless /api/* requests to root api.php router
+    RewriteRule ^api/?(.*)$ api.php [E=HTTP_AUTHORIZATION:%{HTTP:Authorization},QSA,L]
+
+    # 3. Allow real directories (excluding /api)
+    RewriteCond %{REQUEST_URI} !^/api
     RewriteCond %{REQUEST_FILENAME} -d
     RewriteRule ^ - [L]
 
-    # Route ALL /api/... requests directly to root api.php
-    RewriteRule ^api/(.*)$ api.php [QSA,L]
-
-    # Send all other requests to index.html for React SPA routing
+    # 4. Route all frontend SPA routes to index.html
     RewriteRule ^ /index.html [L]
 </IfModule>
