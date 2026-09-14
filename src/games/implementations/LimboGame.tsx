@@ -4,7 +4,7 @@ import audio from '../utils/audioEngine.js';
 import { BettingButton } from '../../components/games/BettingButton.js';
 
 export default function LimboGame() {
-  const { state, placeBet, addWin, setGlobalBet } = useCasino();
+  const { state, placeBet, addWin, setGlobalBet, shouldGameWin } = useCasino();
   const [bet, setBet] = useState(state.globalBet || 10);
   const [target, setTarget] = useState(2);
   const [playing, setPlaying] = useState(false);
@@ -33,9 +33,15 @@ export default function LimboGame() {
     setResult(null);
     audio.playBet();
 
-    // Generate outcome (house edge ~1%)
+    const isWinAllowed = shouldGameWin ? shouldGameWin('limbo') : true;
+
+    // Generate outcome with admin RTP control
     let outcome;
-    if (limboCheats.forceHit || godMode) {
+    if (!isWinAllowed) {
+      // Force loss: outcome strictly lower than target
+      outcome = Math.max(1.00, Number((target * (0.2 + Math.random() * 0.7)).toFixed(2)));
+      if (outcome >= target) outcome = Number((target - 0.05).toFixed(2));
+    } else if (limboCheats.forceHit || godMode) {
       // Always generate a winning outcome (>= target)
       outcome = target + Math.random() * (target * 2);
     } else {

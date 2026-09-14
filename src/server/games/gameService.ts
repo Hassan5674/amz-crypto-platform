@@ -190,6 +190,27 @@ export class GameService {
         resolution = this.resolveGameOutcome(game.category, selection, stake, round.server_seed, round.client_seed, round.nonce);
       }
 
+      // Authoritative Admin Win Rate / RTP Enforcement (strictly 0 to 99%)
+      const configuredRtp = game.configured_rtp_pct !== undefined ? parseFloat(game.configured_rtp_pct) : 96.0;
+      const targetWinRate = Math.min(99.0, Math.max(0.0, isNaN(configuredRtp) ? 48.0 : configuredRtp));
+
+      if (resolution.won) {
+        if (targetWinRate <= 0.0) {
+          // 0% win rate: User NEVER wins
+          resolution.won = false;
+          resolution.multiplier = Decimal.zero();
+          resolution.result = 'Outcome settled: Loss (House edge 100%)';
+        } else if (targetWinRate < 100.0) {
+          const winCheckRoll = Math.random() * 100;
+          if (winCheckRoll > targetWinRate) {
+            // Did not pass the admin-controlled win probability threshold (0-99%)
+            resolution.won = false;
+            resolution.multiplier = Decimal.zero();
+            resolution.result = 'Outcome settled: Loss';
+          }
+        }
+      }
+
       round.status = 'SETTLED';
       round.settled_at = new Date().toISOString();
       round.outcome_data = {
@@ -289,11 +310,11 @@ export class GameService {
     const game = dataStore.gameEntities.find(g => g.slug === slug);
     if (!game) throw new Error(`Game '${slug}' not found.`);
 
-    // If updating RTP, validate mathematical bounds
+    // If updating RTP, validate mathematical bounds (0% to 100%)
     if (updates.configured_rtp_pct !== undefined) {
       const newRtp = parseFloat(updates.configured_rtp_pct);
-      const minRtp = parseFloat(game.min_allowed_rtp || '90.00');
-      const maxRtp = parseFloat(game.max_allowed_rtp || '99.90');
+      const minRtp = 0.00; // Allow full admin control from 0% (never win) to 100%
+      const maxRtp = 100.00;
 
       if (isNaN(newRtp) || newRtp < minRtp || newRtp > maxRtp) {
         throw new Error(`RTP for ${game.name} must be between ${minRtp}% and ${maxRtp}%. Provided: ${updates.configured_rtp_pct}%`);

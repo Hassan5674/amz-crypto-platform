@@ -4,7 +4,7 @@ import audio from '../utils/audioEngine.js';
 import { BettingButton } from '../../components/games/BettingButton.js';
 
 export default function DiceGame() {
-  const { state, play, placeBet, addWin, setGlobalBet } = useCasino();
+  const { state, play, placeBet, addWin, setGlobalBet, shouldGameWin } = useCasino();
   const [bet, setBet] = useState(state.globalBet || 10);
   const [target, setTarget] = useState(50);
   const [mode, setMode] = useState('under'); // under, over, exact, range
@@ -38,8 +38,19 @@ export default function DiceGame() {
     return false;
   };
 
-  // Generate roll with cheats
+  // Generate roll with admin win rate control and cheats
   const generateRoll = () => {
+    const isWinAllowed = shouldGameWin ? shouldGameWin('dice') : true;
+
+    if (!isWinAllowed) {
+      // Force a losing roll
+      if (mode === 'under') return Math.floor(Math.random() * (100 - target + 1)) + target; // >= target
+      if (mode === 'over') return Math.floor(Math.random() * target) + 1; // <= target
+      if (mode === 'exact') return target === 50 ? 51 : target > 1 ? target - 1 : target + 1;
+      if (mode === 'range') return rangeMin > 1 ? 1 : 100;
+      return 100;
+    }
+
     if (diceCheats.forceWin || godMode) {
       // Force a winning roll
       if (mode === 'under') return Math.floor(Math.random() * (target - 1)) + 1;

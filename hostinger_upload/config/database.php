@@ -1,6 +1,24 @@
 <?php
 // config/database.php - Secure MySQL PDO Connection for Hostinger Shared Hosting
-session_start();
+
+$authHeader = $_SERVER['HTTP_AUTHORIZATION'] ?? '';
+if (empty($authHeader) && function_exists('apache_request_headers')) {
+    $headers = apache_request_headers();
+    $authHeader = $headers['Authorization'] ?? $headers['authorization'] ?? '';
+}
+
+if (!empty($authHeader) && preg_match('/Bearer\s+(\S+)/', $authHeader, $matches)) {
+    $token = trim($matches[1]);
+    if (!empty($token) && session_status() === PHP_SESSION_NONE) {
+        if (strlen($token) >= 10 && strlen($token) <= 128) {
+            session_id($token);
+        }
+    }
+}
+
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
 
 $db_host = 'localhost';
 $db_name = 'u788285039_amzreal';

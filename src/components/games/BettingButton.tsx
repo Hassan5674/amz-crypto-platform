@@ -25,7 +25,7 @@ export const BettingButton: React.FC<BettingButtonProps> = ({
   balance,
   betAmount,
 }) => {
-  const { reloadPracticeChips, openDepositModal } = useCasino();
+  const { openDepositModal } = useCasino();
   const isInsufficient = balance !== undefined && betAmount !== undefined && betAmount > balance;
 
   return (
@@ -46,11 +46,7 @@ export const BettingButton: React.FC<BettingButtonProps> = ({
           if (isBetting) return;
           if (isInsufficient) {
             e.stopPropagation();
-            if (balance !== undefined && balance <= 0) {
-              reloadPracticeChips(1000);
-            } else {
-              openDepositModal();
-            }
+            openDepositModal();
             return;
           }
           if (!disabled) {
@@ -67,9 +63,7 @@ export const BettingButton: React.FC<BettingButtonProps> = ({
         ) : isInsufficient ? (
           <span className="flex items-center justify-center gap-2 truncate">
             <Sparkles className="w-4 h-4 text-amber-200 shrink-0" />
-            <span className="truncate">
-              {balance !== undefined && balance <= 0 ? 'Load Demo Chips & Play' : 'Deposit to Play'}
-            </span>
+            <span className="truncate">Deposit to Play</span>
           </span>
         ) : (
           <span className="truncate">{label}</span>
@@ -83,12 +77,11 @@ export const BettingButton: React.FC<BettingButtonProps> = ({
             type="button"
             onClick={(e) => {
               e.stopPropagation();
-              reloadPracticeChips(1000);
+              openDepositModal();
             }}
             className="text-emerald-400 hover:text-emerald-300 font-medium underline underline-offset-2 cursor-pointer transition-colors flex items-center gap-1"
           >
-            <Coins className="w-3 h-3 text-emerald-400" />
-            +$1,000 Free Chips
+            Deposit Funds
           </button>
         </div>
       )}

@@ -71,6 +71,7 @@ import {
   AdminOverviewView,
   AdminUsersView,
   AdminDepositsView,
+  AdminDepositBonusesView,
   AdminWithdrawalsView,
   AdminInvestmentPlansView,
   AdminInvestmentsView,
@@ -367,6 +368,7 @@ function MainApp() {
           {adminView === 'adjustments' && <AdminManualAdjustmentView />}
           {adminView === 'users' && <AdminUsersView />}
           {adminView === 'deposits' && <AdminDepositsView />}
+          {adminView === 'deposit-bonuses' && <AdminDepositBonusesView />}
           {adminView === 'withdrawals' && <AdminWithdrawalsView />}
           {adminView === 'investment-plans' && <AdminInvestmentPlansView />}
           {adminView === 'investments' && <AdminInvestmentsView />}

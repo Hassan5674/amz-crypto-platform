@@ -1,74 +1,44 @@
 <?php
-// api/games/play.php
+// hostinger_upload/api/games/play.php
 header('Content-Type: application/json; charset=utf-8');
-require_once '../../config/database.php';
+require_once __DIR__ . '/../../config/database.php';
+require_once __DIR__ . '/../core/WalletService.php';
 require_auth();
 
 $userId = get_current_user_id();
-$input = json_decode(file_get_contents('php://input'), true);
-$gameId = intval($input['game_id'] ?? $input['gameId'] ?? 1);
-$betAmount = floatval($input['bet_amount'] ?? $input['betAmount'] ?? 0);
+$input = json_decode(file_get_contents('php://input'), true) ?? [];
+$gameId = (string)($input['game_id'] ?? $input['gameId'] ?? $input['game_slug'] ?? '1');
+$betAmount = floatval($input['bet_amount'] ?? $input['betAmount'] ?? $input['stake'] ?? $input['amount'] ?? 0);
 $multiplier = floatval($input['multiplier'] ?? 2.0);
-$isWin = (bool)($input['is_win'] ?? ($multiplier > 1.0 && mt_rand(0, 1) === 1));
+$selection = (string)($input['selection'] ?? $input['choice'] ?? 'PLAY');
+$currency = trim($input['currency'] ?? 'USD');
+$clientSeed = $input['client_seed'] ?? null;
 
 if ($betAmount <= 0) {
-    echo json_encode(['success' => false, 'message' => 'Invalid bet amount.']);
+    echo json_encode(['success' => false, 'message' => 'Invalid bet amount. Must be greater than 0.']);
     exit;
 }
 
 try {
-    $pdo->beginTransaction();
-
-    // Lock wallet
-    $stmtWallet = $pdo->prepare("SELECT id, available_balance FROM wallets WHERE user_id = ? FOR UPDATE");
-    $stmtWallet->execute([$userId]);
-    $wallet = $stmtWallet->fetch();
-
-    if (!$wallet || floatval($wallet['available_balance']) < $betAmount) {
-        $pdo->rollBack();
-        echo json_encode(['success' => false, 'message' => 'Insufficient balance for this bet.']);
-        exit;
-    }
-
-    $balanceBefore = floatval($wallet['available_balance']);
-    $newBalance = $balanceBefore - $betAmount;
-
-    // Deduct stake
-    $stmtUpd = $pdo->prepare("UPDATE wallets SET available_balance = ? WHERE id = ?");
-    $stmtUpd->execute([$newBalance, $wallet['id']]);
-
-    // Ledger for bet stake
-    $stmtLedgerBet = $pdo->prepare("INSERT INTO wallet_ledgers (user_id, wallet_id, transaction_type, amount, balance_before, balance_after, reference_type, reference_id, description) VALUES (?, ?, 'GAME_BET', ?, ?, ?, 'GAME', ?, 'Game bet stake')");
-    $stmtLedgerBet->execute([$userId, $wallet['id'], -$betAmount, $balanceBefore, $newBalance, $gameId]);
-
-    $payout = 0;
-    if ($isWin) {
-        $payout = $betAmount * $multiplier;
-        $winBalanceBefore = $newBalance;
-        $newBalance = $winBalanceBefore + $payout;
-
-        $stmtUpdWin = $pdo->prepare("UPDATE wallets SET available_balance = ? WHERE id = ?");
-        $stmtUpdWin->execute([$newBalance, $wallet['id']]);
-
-        $stmtLedgerWin = $pdo->prepare("INSERT INTO wallet_ledgers (user_id, wallet_id, transaction_type, amount, balance_before, balance_after, reference_type, reference_id, description) VALUES (?, ?, 'GAME_WIN', ?, ?, ?, 'GAME', ?, 'Game payout win')");
-        $stmtLedgerWin->execute([$userId, $wallet['id'], $payout, $winBalanceBefore, $newBalance, $gameId]);
-    }
-
-    $pdo->commit();
+    $walletService = new WalletService($pdo);
+    // Server computes outcome strictly using admin win probability (0-99%) and applies net profit/loss atomically
+    $result = $walletService->playServerAuthoritativeRound(
+        $userId,
+        $betAmount,
+        $gameId,
+        $selection,
+        $multiplier,
+        $clientSeed,
+        $currency
+    );
 
     echo json_encode([
         'success' => true,
-        'message' => $isWin ? 'Congratulations, you won!' : 'Better luck next time!',
-        'data' => [
-            'is_win' => $isWin,
-            'payout' => $payout,
-            'net_profit' => $isWin ? ($payout - $betAmount) : -$betAmount,
-            'new_balance' => $newBalance
-        ]
+        'message' => $result['is_win'] ? 'Congratulations, you won!' : 'Better luck next time!',
+        'data' => $result
     ]);
 } catch (Exception $e) {
-    if ($pdo->inTransaction()) $pdo->rollBack();
-    http_response_code(500);
-    echo json_encode(['success' => false, 'message' => 'Game processing error: ' . $e->getMessage()]);
+    http_response_code(400);
+    echo json_encode(['success' => false, 'message' => $e->getMessage()]);
 }
 ?>

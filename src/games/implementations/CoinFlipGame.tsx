@@ -6,7 +6,7 @@ import { BettingButton } from '../../components/games/BettingButton.js';
 const MULTIPLIER = 1.96; // 2% house edge
 
 export default function CoinFlipGame() {
-  const { state, placeBet, addWin, setGlobalBet } = useCasino();
+  const { state, placeBet, addWin, setGlobalBet, shouldGameWin } = useCasino();
   const [bet, setBet] = useState(state.globalBet || 10);
   const [choice, setChoice] = useState('heads');
   const [flipping, setFlipping] = useState(false);
@@ -30,9 +30,14 @@ export default function CoinFlipGame() {
     setResult(null);
     audio.playBet();
 
-    // Admin cheat: always win
+    const isWinAllowed = shouldGameWin ? shouldGameWin('coinflip') : true;
+
+    // Admin win rate / cheat control
     let isHeads;
-    if (coinflipCheats.alwaysWin || godMode) {
+    if (!isWinAllowed) {
+      // Force loss: land opposite of user's choice
+      isHeads = choice !== 'heads';
+    } else if (coinflipCheats.alwaysWin || godMode) {
       isHeads = choice === 'heads';
     } else {
       isHeads = Math.random() > 0.5;

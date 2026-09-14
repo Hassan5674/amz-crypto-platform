@@ -30,7 +30,9 @@ import {
   PlusCircle,
   MinusCircle,
   Wallet,
-  History
+  History,
+  Gift,
+  Zap
 } from 'lucide-react';
 import { Button } from '../../components/ui/Button.js';
 import { Card } from '../../components/ui/Card.js';
@@ -1383,6 +1385,8 @@ export const AdminStakingView: React.FC = () => {
           description: editForm.description,
           reward_rate: parseFloat(editForm.reward_rate) || 5.0,
           lock_period_days: parseInt(editForm.lock_period_days, 10) || 30,
+          min_stake: editForm.min_stake,
+          max_stake: editForm.max_stake,
           status: editForm.status
         })
       });
@@ -1730,6 +1734,27 @@ export const AdminStakingView: React.FC = () => {
                     type="number"
                     value={editForm.lock_period_days}
                     onChange={(e) => setEditForm({ ...editForm, lock_period_days: e.target.value })}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white outline-none focus:border-indigo-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-slate-400 mb-1 font-semibold">Min Stake Limit</label>
+                  <input
+                    type="number"
+                    value={editForm.min_stake}
+                    onChange={(e) => setEditForm({ ...editForm, min_stake: e.target.value })}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white outline-none focus:border-indigo-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-400 mb-1 font-semibold">Max Stake Limit</label>
+                  <input
+                    type="number"
+                    value={editForm.max_stake}
+                    onChange={(e) => setEditForm({ ...editForm, max_stake: e.target.value })}
                     className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-white outline-none focus:border-indigo-500"
                   />
                 </div>
@@ -2426,28 +2451,890 @@ export const AdminGameHistoryView: React.FC = () => {
 };
 
 // ----------------------------------------------------------------------
-// 10. Admin Referrals View
+// 10. Admin Referrals & Deposit Bonuses Control View
 // ----------------------------------------------------------------------
 export const AdminReferralsView: React.FC = () => {
-  const referrals = [
-    { referrer: 'Sarah Jenkins (@sarah_investor)', referred: 'Michael Sterling (@michael_inv)', date: '2026-08-28', status: 'ACTIVE' },
-    { referrer: 'Sarah Jenkins (@sarah_investor)', referred: 'Clara Vance (@clara_capital)', date: '2026-09-02', status: 'ACTIVE' },
-  ];
+  const [activeTab, setActiveTab] = useState<'RULES' | 'BONUSES' | 'COMMISSIONS' | 'LINKAGES'>('RULES');
+  const [rules, setRules] = useState<any[]>([]);
+  const [bonusTiers, setBonusTiers] = useState<any[]>([]);
+  const [commissions, setCommissions] = useState<any[]>([]);
+  const [linkages, setLinkages] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [actionLoading, setActionLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [successNotice, setSuccessNotice] = useState<string | null>(null);
 
-  const columns: Column<typeof referrals[0]>[] = [
-    { header: 'Referrer Account', accessorKey: 'referrer' },
-    { header: 'Invited Account', accessorKey: 'referred' },
-    { header: 'Linkage Date', accessorKey: 'date' },
-    { header: 'Status', cell: (r) => <Badge variant="success">{r.status}</Badge> },
-  ];
+  // Modal States
+  const [showRuleModal, setShowRuleModal] = useState(false);
+  const [editingRule, setEditingRule] = useState<any | null>(null);
+  const [ruleFormData, setRuleFormData] = useState({
+    name: '',
+    event_type: 'FIRST_DEPOSIT_CONFIRMED',
+    calculation_type: 'PERCENTAGE',
+    rate: '10.00',
+    fixed_amount: '0.00',
+    minimum_event_amount: '10.00',
+    maximum_commission: '1000.00',
+    status: 'ACTIVE'
+  });
+
+  const [showBonusModal, setShowBonusModal] = useState(false);
+  const [editingBonus, setEditingBonus] = useState<any | null>(null);
+  const [bonusFormData, setBonusFormData] = useState({
+    name: '',
+    min_deposit: '50.00',
+    max_deposit: '',
+    bonus_amount: '10.00',
+    bonus_type: 'FIXED',
+    status: 'ACTIVE',
+    description: ''
+  });
+
+  const getToken = () => localStorage.getItem('apex_session_token') || localStorage.getItem('token') || localStorage.getItem('apex_token') || '';
+
+  const fetchData = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const token = getToken();
+      const headers = { Authorization: `Bearer ${token}` };
+
+      const [rulesRes, bonusesRes, commRes, linkRes] = await Promise.all([
+        fetch('/api/admin/referral-rules', { headers }),
+        fetch('/api/admin/deposit-bonus-tiers', { headers }),
+        fetch('/api/admin/commissions', { headers }),
+        fetch('/api/admin/referral-linkages', { headers })
+      ]);
+
+      const [rulesData, bonusesData, commData, linkData] = await Promise.all([
+        rulesRes.json(),
+        bonusesRes.json(),
+        commRes.json(),
+        linkRes.json()
+      ]);
+
+      if (rulesData.success) setRules(rulesData.data || []);
+      if (bonusesData.success) setBonusTiers(bonusesData.data || []);
+      if (commData.success) setCommissions(commData.data || []);
+      if (linkData.success) setLinkages(linkData.data || []);
+    } catch (e: any) {
+      setError(e?.message || 'Failed to load referral and bonus configuration');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchData();
+  }, []);
+
+  const handleSaveRule = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      setActionLoading(true);
+      setError(null);
+      const token = getToken();
+
+      const url = editingRule ? `/api/admin/referral-rules/${editingRule.id}` : '/api/admin/referral-rules';
+      const method = editingRule ? 'PUT' : 'POST';
+
+      const res = await fetch(url, {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify(ruleFormData)
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.message || 'Failed to save commission rule');
+      }
+
+      setSuccessNotice(editingRule ? 'Commission rule updated successfully!' : 'New commission rule created successfully!');
+      setShowRuleModal(false);
+      setEditingRule(null);
+      fetchData();
+    } catch (err: any) {
+      setError(err?.message || 'Error saving rule');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleDeleteRule = async (id: number) => {
+    if (!window.confirm(`Are you sure you want to delete commission rule #${id}?`)) return;
+    try {
+      setActionLoading(true);
+      const token = getToken();
+      const res = await fetch(`/api/admin/referral-rules/${id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.message || 'Failed to delete rule');
+      setSuccessNotice(`Commission rule #${id} deleted.`);
+      fetchData();
+    } catch (err: any) {
+      setError(err?.message || 'Error deleting rule');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleSaveBonusTier = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      setActionLoading(true);
+      setError(null);
+      const token = getToken();
+
+      const url = editingBonus ? `/api/admin/deposit-bonus-tiers/${editingBonus.id}` : '/api/admin/deposit-bonus-tiers';
+      const method = editingBonus ? 'PUT' : 'POST';
+
+      const res = await fetch(url, {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify(bonusFormData)
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.message || 'Failed to save bonus tier');
+      }
+
+      setSuccessNotice(editingBonus ? 'Deposit bonus tier updated successfully!' : 'New deposit bonus tier created successfully!');
+      setShowBonusModal(false);
+      setEditingBonus(null);
+      fetchData();
+    } catch (err: any) {
+      setError(err?.message || 'Error saving bonus tier');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleDeleteBonusTier = async (id: number) => {
+    if (!window.confirm(`Are you sure you want to delete deposit bonus tier #${id}?`)) return;
+    try {
+      setActionLoading(true);
+      const token = getToken();
+      const res = await fetch(`/api/admin/deposit-bonus-tiers/${id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.message || 'Failed to delete bonus tier');
+      setSuccessNotice(`Deposit bonus tier #${id} deleted.`);
+      fetchData();
+    } catch (err: any) {
+      setError(err?.message || 'Error deleting bonus tier');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleApproveCommission = async (id: number) => {
+    try {
+      setActionLoading(true);
+      const token = getToken();
+      const res = await fetch(`/api/admin/commissions/${id}/approve`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.message || 'Failed to approve commission');
+      setSuccessNotice(`Commission #${id} approved and credited to referrer wallet via double-entry ledger!`);
+      fetchData();
+    } catch (err: any) {
+      setError(err?.message || 'Error approving commission');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const openNewRuleModal = () => {
+    setEditingRule(null);
+    setRuleFormData({
+      name: '',
+      event_type: 'FIRST_DEPOSIT_CONFIRMED',
+      calculation_type: 'PERCENTAGE',
+      rate: '10.00',
+      fixed_amount: '0.00',
+      minimum_event_amount: '10.00',
+      maximum_commission: '1000.00',
+      status: 'ACTIVE'
+    });
+    setShowRuleModal(true);
+  };
+
+  const openEditRuleModal = (rule: any) => {
+    setEditingRule(rule);
+    setRuleFormData({
+      name: rule.name || '',
+      event_type: rule.event_type || 'FIRST_DEPOSIT_CONFIRMED',
+      calculation_type: rule.calculation_type || 'PERCENTAGE',
+      rate: String(rule.rate || '10.00'),
+      fixed_amount: String(rule.fixed_amount || '0.00'),
+      minimum_event_amount: String(rule.minimum_event_amount || '10.00'),
+      maximum_commission: String(rule.maximum_commission || '1000.00'),
+      status: rule.status || 'ACTIVE'
+    });
+    setShowRuleModal(true);
+  };
+
+  const openNewBonusModal = () => {
+    setEditingBonus(null);
+    setBonusFormData({
+      name: '',
+      min_deposit: '50.00',
+      max_deposit: '',
+      bonus_amount: '10.00',
+      bonus_type: 'FIXED',
+      status: 'ACTIVE',
+      description: ''
+    });
+    setShowBonusModal(true);
+  };
+
+  const openEditBonusModal = (tier: any) => {
+    setEditingBonus(tier);
+    setBonusFormData({
+      name: tier.name || '',
+      min_deposit: String(tier.min_deposit || '50.00'),
+      max_deposit: tier.max_deposit ? String(tier.max_deposit) : '',
+      bonus_amount: String(tier.bonus_amount || '10.00'),
+      bonus_type: tier.bonus_type || 'FIXED',
+      status: tier.status || 'ACTIVE',
+      description: tier.description || ''
+    });
+    setShowBonusModal(true);
+  };
 
   return (
-    <div className="space-y-6 text-left">
-      <div>
-        <h2 className="text-xl font-bold text-white">Referral Network Linkages</h2>
-        <p className="text-xs text-slate-400">Trace invitation trees and commission eligibility</p>
+    <div className="space-y-6 text-left" id="admin-referrals-view">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h2 className="text-xl font-bold text-white flex items-center gap-2">
+            <Users className="w-6 h-6 text-indigo-400" />
+            Referral Commissions & Deposit Bonuses Control
+          </h2>
+          <p className="text-xs text-slate-400">
+            Set authoritative referral commission percentages, configure deposit bonus tiers, and approve affiliate payouts.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={fetchData} isLoading={loading}>
+            <RefreshCw className="w-3.5 h-3.5 mr-1" /> Refresh
+          </Button>
+          {activeTab === 'RULES' && (
+            <Button variant="primary" size="sm" onClick={openNewRuleModal}>
+              <Plus className="w-3.5 h-3.5 mr-1" /> Add Commission Rule
+            </Button>
+          )}
+          {activeTab === 'BONUSES' && (
+            <Button variant="primary" size="sm" onClick={openNewBonusModal}>
+              <Plus className="w-3.5 h-3.5 mr-1" /> Add Deposit Bonus Tier
+            </Button>
+          )}
+        </div>
       </div>
-      <DataTable title="Referral Connection Records" columns={columns} data={referrals} />
+
+      {/* Notifications */}
+      {error && (
+        <Alert type="error" title="Error">
+          {error}
+        </Alert>
+      )}
+      {successNotice && (
+        <Alert type="success" title="Success">
+          {successNotice}
+        </Alert>
+      )}
+
+      {/* Metric Cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="p-3.5 bg-slate-900/80 rounded-xl border border-slate-800">
+          <span className="text-[11px] text-slate-400 font-medium">Commission Rules</span>
+          <p className="text-lg font-bold text-white mt-1">{rules.length}</p>
+          <span className="text-[10px] text-emerald-400">{rules.filter(r => r.status === 'ACTIVE').length} Active</span>
+        </div>
+        <div className="p-3.5 bg-slate-900/80 rounded-xl border border-slate-800">
+          <span className="text-[11px] text-slate-400 font-medium">Deposit Bonus Tiers</span>
+          <p className="text-lg font-bold text-white mt-1">{bonusTiers.length}</p>
+          <span className="text-[10px] text-indigo-400">{bonusTiers.filter(b => b.status === 'ACTIVE').length} Active Tiers</span>
+        </div>
+        <div className="p-3.5 bg-slate-900/80 rounded-xl border border-slate-800">
+          <span className="text-[11px] text-slate-400 font-medium">Pending Commissions</span>
+          <p className="text-lg font-bold text-amber-400 mt-1">
+            {commissions.filter(c => c.status === 'PENDING').length}
+          </p>
+          <span className="text-[10px] text-slate-400">{commissions.length} Total tracked</span>
+        </div>
+        <div className="p-3.5 bg-slate-900/80 rounded-xl border border-slate-800">
+          <span className="text-[11px] text-slate-400 font-medium">Referral Linkages</span>
+          <p className="text-lg font-bold text-emerald-400 mt-1">{linkages.length}</p>
+          <span className="text-[10px] text-slate-400">Total invited users</span>
+        </div>
+      </div>
+
+      {/* Navigation Tabs */}
+      <div className="flex border-b border-slate-800 gap-2">
+        <button
+          type="button"
+          onClick={() => setActiveTab('RULES')}
+          className={`pb-2.5 px-3 text-xs font-semibold border-b-2 transition ${
+            activeTab === 'RULES'
+              ? 'border-indigo-500 text-indigo-400'
+              : 'border-transparent text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          Commission Rates & Rules ({rules.length})
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('BONUSES')}
+          className={`pb-2.5 px-3 text-xs font-semibold border-b-2 transition ${
+            activeTab === 'BONUSES'
+              ? 'border-indigo-500 text-indigo-400'
+              : 'border-transparent text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          Deposit Bonus Tiers ({bonusTiers.length})
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('COMMISSIONS')}
+          className={`pb-2.5 px-3 text-xs font-semibold border-b-2 transition ${
+            activeTab === 'COMMISSIONS'
+              ? 'border-indigo-500 text-indigo-400'
+              : 'border-transparent text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          Commission Payout Queue ({commissions.length})
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('LINKAGES')}
+          className={`pb-2.5 px-3 text-xs font-semibold border-b-2 transition ${
+            activeTab === 'LINKAGES'
+              ? 'border-indigo-500 text-indigo-400'
+              : 'border-transparent text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          Referral Network Linkages ({linkages.length})
+        </button>
+      </div>
+
+      {/* =================================================================== */}
+      {/* 1. COMMISSION RULES TAB                                             */}
+      {/* =================================================================== */}
+      {activeTab === 'RULES' && (
+        <div className="space-y-4">
+          <div className="flex justify-between items-center bg-slate-900/40 p-3 rounded-xl border border-slate-800 text-xs text-slate-300">
+            <div>
+              <p className="font-semibold text-white">How Referral Commissions Work:</p>
+              <p className="text-slate-400 text-[11px] mt-0.5">
+                When an invited user deposits, wagers, or stakes, the active rule computes the referrer's commission percentage and generates an authoritative claim or ledger credit.
+              </p>
+            </div>
+            <Button size="sm" variant="primary" onClick={openNewRuleModal}>
+              <Plus className="w-3.5 h-3.5 mr-1" /> New Rule
+            </Button>
+          </div>
+
+          <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-900/50">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-slate-950 text-slate-400 uppercase text-[10px] tracking-wider border-b border-slate-800">
+                <tr>
+                  <th className="p-3">Rule ID & Name</th>
+                  <th className="p-3">Trigger Event</th>
+                  <th className="p-3">Commission Rate</th>
+                  <th className="p-3">Min Deposit</th>
+                  <th className="p-3">Max Cap</th>
+                  <th className="p-3">Status</th>
+                  <th className="p-3 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800/60 font-medium">
+                {rules.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="p-6 text-center text-slate-500">
+                      No commission rules configured. Click "Add Commission Rule" to create one.
+                    </td>
+                  </tr>
+                ) : (
+                  rules.map((rule) => (
+                    <tr key={rule.id} className="hover:bg-slate-800/30 transition">
+                      <td className="p-3">
+                        <div className="font-bold text-white">{rule.name}</div>
+                        <div className="text-[10px] text-slate-500 font-mono">ID #{rule.id}</div>
+                      </td>
+                      <td className="p-3">
+                        <Badge variant="neutral" size="sm">
+                          {rule.event_type}
+                        </Badge>
+                      </td>
+                      <td className="p-3 font-mono font-bold text-emerald-400">
+                        {rule.rate}%
+                      </td>
+                      <td className="p-3 font-mono text-slate-300">
+                        ${rule.minimum_event_amount} {rule.currency || 'USD'}
+                      </td>
+                      <td className="p-3 font-mono text-slate-300">
+                        ${rule.maximum_commission} {rule.currency || 'USD'}
+                      </td>
+                      <td className="p-3">
+                        <Badge variant={rule.status === 'ACTIVE' ? 'success' : 'neutral'} size="sm">
+                          {rule.status}
+                        </Badge>
+                      </td>
+                      <td className="p-3 text-right">
+                        <div className="flex items-center justify-end gap-1.5">
+                          <Button size="sm" variant="outline" onClick={() => openEditRuleModal(rule)}>
+                            <Edit2 className="w-3 h-3" /> Edit
+                          </Button>
+                          <Button size="sm" variant="ghost" onClick={() => handleDeleteRule(rule.id)} className="text-rose-400 hover:text-rose-300">
+                            <Trash2 className="w-3 h-3" />
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* =================================================================== */}
+      {/* 2. DEPOSIT BONUS TIERS TAB                                          */}
+      {/* =================================================================== */}
+      {activeTab === 'BONUSES' && (
+        <div className="space-y-4">
+          <div className="flex justify-between items-center bg-slate-900/40 p-3 rounded-xl border border-slate-800 text-xs text-slate-300">
+            <div>
+              <p className="font-semibold text-white">Deposit Bonus Incentives:</p>
+              <p className="text-slate-400 text-[11px] mt-0.5">
+                Users depositing crypto or topping up will automatically receive instant match bonuses directly credited to their ledger balance based on these active tiers.
+              </p>
+            </div>
+            <Button size="sm" variant="primary" onClick={openNewBonusModal}>
+              <Plus className="w-3.5 h-3.5 mr-1" /> New Bonus Tier
+            </Button>
+          </div>
+
+          <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-900/50">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-slate-950 text-slate-400 uppercase text-[10px] tracking-wider border-b border-slate-800">
+                <tr>
+                  <th className="p-3">Tier Name & Details</th>
+                  <th className="p-3">Min Deposit Required</th>
+                  <th className="p-3">Max Deposit Range</th>
+                  <th className="p-3">Bonus Reward</th>
+                  <th className="p-3">Status</th>
+                  <th className="p-3 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800/60 font-medium">
+                {bonusTiers.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="p-6 text-center text-slate-500">
+                      No deposit bonus tiers configured. Click "Add Deposit Bonus Tier" to create one.
+                    </td>
+                  </tr>
+                ) : (
+                  bonusTiers.map((tier) => (
+                    <tr key={tier.id} className="hover:bg-slate-800/30 transition">
+                      <td className="p-3">
+                        <div className="font-bold text-white">{tier.name}</div>
+                        <div className="text-[10px] text-slate-400">{tier.description || 'Standard Deposit Bonus'}</div>
+                      </td>
+                      <td className="p-3 font-mono font-bold text-slate-200">
+                        ${tier.min_deposit} USD
+                      </td>
+                      <td className="p-3 font-mono text-slate-400">
+                        {tier.max_deposit ? `$${tier.max_deposit} USD` : 'No Limit (Above Min)'}
+                      </td>
+                      <td className="p-3 font-mono font-bold text-emerald-400">
+                        {tier.bonus_type === 'PERCENTAGE' ? `${tier.bonus_amount}% Match` : `+$${tier.bonus_amount} Cash`}
+                      </td>
+                      <td className="p-3">
+                        <Badge variant={tier.status === 'ACTIVE' ? 'success' : 'neutral'} size="sm">
+                          {tier.status}
+                        </Badge>
+                      </td>
+                      <td className="p-3 text-right">
+                        <div className="flex items-center justify-end gap-1.5">
+                          <Button size="sm" variant="outline" onClick={() => openEditBonusModal(tier)}>
+                            <Edit2 className="w-3 h-3" /> Edit
+                          </Button>
+                          <Button size="sm" variant="ghost" onClick={() => handleDeleteBonusTier(tier.id)} className="text-rose-400 hover:text-rose-300">
+                            <Trash2 className="w-3 h-3" />
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* =================================================================== */}
+      {/* 3. COMMISSION PAYOUT QUEUE TAB                                      */}
+      {/* =================================================================== */}
+      {activeTab === 'COMMISSIONS' && (
+        <div className="space-y-4">
+          <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-900/50">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-slate-950 text-slate-400 uppercase text-[10px] tracking-wider border-b border-slate-800">
+                <tr>
+                  <th className="p-3">Commission ID</th>
+                  <th className="p-3">Referrer</th>
+                  <th className="p-3">Referred User</th>
+                  <th className="p-3">Trigger Event</th>
+                  <th className="p-3">Qualifying Amount</th>
+                  <th className="p-3">Commission Earned</th>
+                  <th className="p-3">Status</th>
+                  <th className="p-3 text-right">Approval Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800/60 font-medium">
+                {commissions.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="p-6 text-center text-slate-500">
+                      No referral commissions recorded yet.
+                    </td>
+                  </tr>
+                ) : (
+                  commissions.map((comm) => (
+                    <tr key={comm.id} className="hover:bg-slate-800/30 transition">
+                      <td className="p-3 font-mono text-slate-400">#{comm.id}</td>
+                      <td className="p-3">
+                        <div className="font-bold text-white">{comm.referrer_name}</div>
+                        {comm.referrer_username && <div className="text-[10px] text-slate-500">@{comm.referrer_username}</div>}
+                      </td>
+                      <td className="p-3">
+                        <div className="text-slate-300">{comm.referred_name}</div>
+                        {comm.referred_username && <div className="text-[10px] text-slate-500">@{comm.referred_username}</div>}
+                      </td>
+                      <td className="p-3">
+                        <Badge variant="neutral" size="sm">{comm.event_type}</Badge>
+                      </td>
+                      <td className="p-3 font-mono text-slate-300">
+                        ${comm.event_amount} {comm.currency}
+                      </td>
+                      <td className="p-3 font-mono font-bold text-emerald-400">
+                        +${comm.commission_amount} {comm.currency}
+                      </td>
+                      <td className="p-3">
+                        <Badge
+                          variant={
+                            comm.status === 'AVAILABLE' || comm.status === 'PAID'
+                              ? 'success'
+                              : comm.status === 'PENDING'
+                              ? 'warning'
+                              : 'danger'
+                          }
+                          size="sm"
+                        >
+                          {comm.status}
+                        </Badge>
+                      </td>
+                      <td className="p-3 text-right">
+                        {comm.status === 'PENDING' ? (
+                          <Button
+                            size="sm"
+                            variant="primary"
+                            onClick={() => handleApproveCommission(comm.id)}
+                            isLoading={actionLoading}
+                          >
+                            <CheckCircle className="w-3.5 h-3.5 mr-1" /> Approve & Credit
+                          </Button>
+                        ) : (
+                          <span className="text-[11px] text-emerald-400 font-semibold flex items-center justify-end gap-1">
+                            <CheckCircle className="w-3.5 h-3.5" /> Credited
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* =================================================================== */}
+      {/* 4. REFERRAL LINKAGES TAB                                            */}
+      {/* =================================================================== */}
+      {activeTab === 'LINKAGES' && (
+        <div className="space-y-4">
+          <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-900/50">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-slate-950 text-slate-400 uppercase text-[10px] tracking-wider border-b border-slate-800">
+                <tr>
+                  <th className="p-3">Link ID</th>
+                  <th className="p-3">Referrer Account</th>
+                  <th className="p-3">Referred User</th>
+                  <th className="p-3">Referral Code Used</th>
+                  <th className="p-3">Attribution Source</th>
+                  <th className="p-3">Linkage Date</th>
+                  <th className="p-3">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800/60 font-medium">
+                {linkages.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="p-6 text-center text-slate-500">
+                      No referral linkages recorded yet.
+                    </td>
+                  </tr>
+                ) : (
+                  linkages.map((link) => (
+                    <tr key={link.id} className="hover:bg-slate-800/30 transition">
+                      <td className="p-3 font-mono text-slate-400">#{link.id}</td>
+                      <td className="p-3">
+                        <div className="font-bold text-white">{link.referrer_name}</div>
+                        <div className="text-[10px] text-slate-400">{link.referrer_email || `@${link.referrer_username}`}</div>
+                      </td>
+                      <td className="p-3">
+                        <div className="font-bold text-white">{link.referred_name}</div>
+                        <div className="text-[10px] text-slate-400">{link.referred_email || `@${link.referred_username}`}</div>
+                      </td>
+                      <td className="p-3 font-mono text-indigo-400 font-bold">
+                        {link.referral_code}
+                      </td>
+                      <td className="p-3 text-slate-300">
+                        {link.attribution_source || 'DIRECT_LINK'}
+                      </td>
+                      <td className="p-3 text-slate-400">
+                        {new Date(link.created_at).toLocaleDateString()}
+                      </td>
+                      <td className="p-3">
+                        <Badge variant={link.status === 'ACTIVE' ? 'success' : 'neutral'} size="sm">
+                          {link.status}
+                        </Badge>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* =================================================================== */}
+      {/* MODAL: CREATE / EDIT COMMISSION RULE                                */}
+      {/* =================================================================== */}
+      {showRuleModal && (
+        <Modal
+          isOpen={showRuleModal}
+          onClose={() => setShowRuleModal(false)}
+          title={editingRule ? `Edit Commission Rule #${editingRule.id}` : 'Create Referral Commission Rule'}
+        >
+          <form onSubmit={handleSaveRule} className="space-y-4 text-left">
+            <div>
+              <label className="block text-xs font-semibold text-slate-300 mb-1">Rule Name</label>
+              <Input
+                value={ruleFormData.name}
+                onChange={e => setRuleFormData({ ...ruleFormData, name: e.target.value })}
+                placeholder="e.g., First Deposit 10% Referral Commission"
+                required
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">Trigger Event</label>
+                <select
+                  value={ruleFormData.event_type}
+                  onChange={e => setRuleFormData({ ...ruleFormData, event_type: e.target.value })}
+                  className="w-full text-xs bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white"
+                >
+                  <option value="FIRST_DEPOSIT_CONFIRMED">First Deposit Confirmed</option>
+                  <option value="ONGOING_DEPOSIT">All Deposits</option>
+                  <option value="STAKE_CREATED">Staking Pool Created</option>
+                  <option value="WAGER_PLACED">Casino Wager Placed</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">Commission Rate (%)</label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  max="100"
+                  value={ruleFormData.rate}
+                  onChange={e => setRuleFormData({ ...ruleFormData, rate: e.target.value })}
+                  required
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">Minimum Event Amount ($)</label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  value={ruleFormData.minimum_event_amount}
+                  onChange={e => setRuleFormData({ ...ruleFormData, minimum_event_amount: e.target.value })}
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">Maximum Commission Cap ($)</label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  value={ruleFormData.maximum_commission}
+                  onChange={e => setRuleFormData({ ...ruleFormData, maximum_commission: e.target.value })}
+                  required
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-300 mb-1">Rule Status</label>
+              <select
+                value={ruleFormData.status}
+                onChange={e => setRuleFormData({ ...ruleFormData, status: e.target.value })}
+                className="w-full text-xs bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white"
+              >
+                <option value="ACTIVE">ACTIVE (Enforcing)</option>
+                <option value="INACTIVE">INACTIVE (Disabled)</option>
+              </select>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <Button type="button" variant="outline" size="sm" onClick={() => setShowRuleModal(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" variant="primary" size="sm" isLoading={actionLoading}>
+                {editingRule ? 'Update Rule' : 'Create Commission Rule'}
+              </Button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {/* =================================================================== */}
+      {/* MODAL: CREATE / EDIT DEPOSIT BONUS TIER                             */}
+      {/* =================================================================== */}
+      {showBonusModal && (
+        <Modal
+          isOpen={showBonusModal}
+          onClose={() => setShowBonusModal(false)}
+          title={editingBonus ? `Edit Deposit Bonus Tier #${editingBonus.id}` : 'Create Deposit Bonus Tier'}
+        >
+          <form onSubmit={handleSaveBonusTier} className="space-y-4 text-left">
+            <div>
+              <label className="block text-xs font-semibold text-slate-300 mb-1">Tier Name</label>
+              <Input
+                value={bonusFormData.name}
+                onChange={e => setBonusFormData({ ...bonusFormData, name: e.target.value })}
+                placeholder="e.g., Bronze Tier: Deposit $50 Get $10 Free"
+                required
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">Min Deposit ($ USD)</label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  value={bonusFormData.min_deposit}
+                  onChange={e => setBonusFormData({ ...bonusFormData, min_deposit: e.target.value })}
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">Max Deposit ($ USD - Optional)</label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  placeholder="Optional limit"
+                  value={bonusFormData.max_deposit}
+                  onChange={e => setBonusFormData({ ...bonusFormData, max_deposit: e.target.value })}
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">Bonus Type</label>
+                <select
+                  value={bonusFormData.bonus_type}
+                  onChange={e => setBonusFormData({ ...bonusFormData, bonus_type: e.target.value })}
+                  className="w-full text-xs bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white"
+                >
+                  <option value="FIXED">Fixed Cash Amount ($)</option>
+                  <option value="PERCENTAGE">Percentage Match (%)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Bonus Amount ({bonusFormData.bonus_type === 'PERCENTAGE' ? '%' : '$'})
+                </label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  value={bonusFormData.bonus_amount}
+                  onChange={e => setBonusFormData({ ...bonusFormData, bonus_amount: e.target.value })}
+                  required
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-300 mb-1">Description / Marketing Text</label>
+              <Input
+                value={bonusFormData.description}
+                onChange={e => setBonusFormData({ ...bonusFormData, description: e.target.value })}
+                placeholder="e.g., Deposit $100 and claim an instant $15 bankroll bonus!"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-300 mb-1">Status</label>
+              <select
+                value={bonusFormData.status}
+                onChange={e => setBonusFormData({ ...bonusFormData, status: e.target.value })}
+                className="w-full text-xs bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white"
+              >
+                <option value="ACTIVE">ACTIVE (Claimable by Users)</option>
+                <option value="INACTIVE">INACTIVE (Hidden)</option>
+              </select>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <Button type="button" variant="outline" size="sm" onClick={() => setShowBonusModal(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" variant="primary" size="sm" isLoading={actionLoading}>
+                {editingBonus ? 'Update Bonus Tier' : 'Create Bonus Tier'}
+              </Button>
+            </div>
+          </form>
+        </Modal>
+      )}
     </div>
   );
 };
@@ -3437,6 +4324,465 @@ export const AdminSettingsView: React.FC = () => {
           </div>
         </div>
       </Card>
+    </div>
+  );
+};
+
+// ----------------------------------------------------------------------
+// 24. Admin Deposit Bonuses & Tiers Management View
+// ----------------------------------------------------------------------
+export const AdminDepositBonusesView: React.FC = () => {
+  const [bonusTiers, setBonusTiers] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [actionLoading, setActionLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [successNotice, setSuccessNotice] = useState<string | null>(null);
+
+  const [showBonusModal, setShowBonusModal] = useState(false);
+  const [editingBonus, setEditingBonus] = useState<any | null>(null);
+  const [bonusFormData, setBonusFormData] = useState({
+    name: '',
+    min_deposit: '10.00',
+    max_deposit: '',
+    bonus_amount: '1.00',
+    bonus_type: 'PERCENTAGE',
+    status: 'ACTIVE',
+    description: ''
+  });
+
+  const getToken = () => localStorage.getItem('apex_session_token') || localStorage.getItem('token') || localStorage.getItem('apex_token') || '';
+
+  const fetchTiers = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const token = getToken();
+      const res = await fetch('/api/admin/deposit-bonus-tiers', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (data.success && Array.isArray(data.data)) {
+        setBonusTiers(data.data);
+      }
+    } catch (err: any) {
+      setError(err?.message || 'Failed to fetch deposit bonus tiers');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchTiers();
+  }, []);
+
+  const openNewBonusModal = () => {
+    setEditingBonus(null);
+    setBonusFormData({
+      name: 'Starter 1% Bonus ($10+)',
+      min_deposit: '10.00',
+      max_deposit: '',
+      bonus_amount: '1.00',
+      bonus_type: 'PERCENTAGE',
+      status: 'ACTIVE',
+      description: 'Get an instant 1% bankroll match on all deposits of $10 or more!'
+    });
+    setShowBonusModal(true);
+  };
+
+  const applyPreset = (name: string, min: string, max: string, type: 'PERCENTAGE' | 'FIXED', val: string, desc: string) => {
+    setEditingBonus(null);
+    setBonusFormData({
+      name,
+      min_deposit: min,
+      max_deposit: max,
+      bonus_amount: val,
+      bonus_type: type,
+      status: 'ACTIVE',
+      description: desc
+    });
+    setShowBonusModal(true);
+  };
+
+  const openEditBonusModal = (tier: any) => {
+    setEditingBonus(tier);
+    setBonusFormData({
+      name: tier.name || '',
+      min_deposit: String(tier.min_deposit || '10.00'),
+      max_deposit: tier.max_deposit ? String(tier.max_deposit) : '',
+      bonus_amount: String(tier.bonus_amount || '1.00'),
+      bonus_type: tier.bonus_type || 'PERCENTAGE',
+      status: tier.status || 'ACTIVE',
+      description: tier.description || ''
+    });
+    setShowBonusModal(true);
+  };
+
+  const handleSaveBonusTier = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      setActionLoading(true);
+      setError(null);
+      const token = getToken();
+
+      const url = editingBonus ? `/api/admin/deposit-bonus-tiers/${editingBonus.id}` : '/api/admin/deposit-bonus-tiers';
+      const method = editingBonus ? 'PUT' : 'POST';
+
+      const res = await fetch(url, {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify(bonusFormData)
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.message || 'Failed to save deposit bonus tier');
+      }
+
+      setSuccessNotice(editingBonus ? 'Deposit bonus tier updated successfully!' : 'New deposit bonus tier created successfully!');
+      setShowBonusModal(false);
+      setEditingBonus(null);
+      fetchTiers();
+    } catch (err: any) {
+      setError(err?.message || 'Error saving bonus tier');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleDeleteBonusTier = async (id: number) => {
+    if (!window.confirm(`Are you sure you want to delete deposit bonus tier #${id}?`)) return;
+    try {
+      setActionLoading(true);
+      const token = getToken();
+      const res = await fetch(`/api/admin/deposit-bonus-tiers/${id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.message || 'Failed to delete tier');
+      setSuccessNotice(`Deposit bonus tier #${id} deleted.`);
+      fetchTiers();
+    } catch (err: any) {
+      setError(err?.message || 'Error deleting tier');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const calculateSampleBonus = () => {
+    const minNum = parseFloat(bonusFormData.min_deposit) || 10;
+    const valNum = parseFloat(bonusFormData.bonus_amount) || 0;
+    if (bonusFormData.bonus_type === 'PERCENTAGE') {
+      const bonusOnMin = (minNum * (valNum / 100)).toFixed(2);
+      const bonusOn100 = (100 * (valNum / 100)).toFixed(2);
+      return `On $${minNum.toFixed(2)} deposit → +$${bonusOnMin} USD (${valNum}%). On $100.00 deposit → +$${bonusOn100} USD.`;
+    } else {
+      return `On $${minNum.toFixed(2)}+ deposit → +$${valNum.toFixed(2)} USD fixed cash added.`;
+    }
+  };
+
+  return (
+    <div className="space-y-6 text-left">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h2 className="text-xl font-bold text-white flex items-center gap-2">
+            <Gift className="w-5 h-5 text-indigo-400" />
+            Deposit Bonus Tiers & Match Rates
+          </h2>
+          <p className="text-xs text-slate-400 mt-1">
+            Configure automatic percentage-based matches (e.g., 1% from $10, 2% from $100) or fixed cash rewards applied directly to user deposit transactions.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={fetchTiers} isLoading={loading}>
+            <RefreshCw className="w-3.5 h-3.5 mr-1" /> Refresh
+          </Button>
+          <Button variant="primary" size="sm" onClick={openNewBonusModal} className="bg-indigo-600 hover:bg-indigo-500">
+            <Plus className="w-3.5 h-3.5 mr-1" /> Add Bonus Tier
+          </Button>
+        </div>
+      </div>
+
+      {/* Notifications */}
+      {error && (
+        <Alert type="error" title="Error">
+          {error}
+        </Alert>
+      )}
+      {successNotice && (
+        <Alert type="success" title="Success">
+          {successNotice}
+        </Alert>
+      )}
+
+      {/* Metric Cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="p-3.5 bg-slate-900/80 rounded-xl border border-slate-800">
+          <span className="text-[11px] text-slate-400 font-medium">Configured Tiers</span>
+          <p className="text-lg font-bold text-white mt-1">{bonusTiers.length}</p>
+          <span className="text-[10px] text-indigo-400">{bonusTiers.filter(b => b.status === 'ACTIVE').length} Active Tiers</span>
+        </div>
+        <div className="p-3.5 bg-slate-900/80 rounded-xl border border-slate-800">
+          <span className="text-[11px] text-slate-400 font-medium">Entry Deposit Floor</span>
+          <p className="text-lg font-bold text-emerald-400 mt-1">
+            ${bonusTiers.length > 0 ? Math.min(...bonusTiers.map(b => parseFloat(b.min_deposit || 10))).toFixed(0) : '10'} USD
+          </p>
+          <span className="text-[10px] text-slate-400">Lowest qualifying deposit</span>
+        </div>
+        <div className="p-3.5 bg-slate-900/80 rounded-xl border border-slate-800">
+          <span className="text-[11px] text-slate-400 font-medium">Top Match Rate</span>
+          <p className="text-lg font-bold text-amber-400 mt-1">
+            {bonusTiers.filter(b => b.bonus_type === 'PERCENTAGE').length > 0
+              ? `${Math.max(...bonusTiers.filter(b => b.bonus_type === 'PERCENTAGE').map(b => parseFloat(b.bonus_amount || 0)))}%`
+              : 'N/A'}
+          </p>
+          <span className="text-[10px] text-slate-400">Max percentage match</span>
+        </div>
+        <div className="p-3.5 bg-slate-900/80 rounded-xl border border-slate-800">
+          <span className="text-[11px] text-slate-400 font-medium">Bonus Engine Status</span>
+          <p className="text-lg font-bold text-emerald-400 mt-1">ONLINE</p>
+          <span className="text-[10px] text-slate-400">Instant ledger crediting</span>
+        </div>
+      </div>
+
+      {/* One-Click Quick Presets */}
+      <div className="p-4 bg-slate-900/50 rounded-2xl border border-slate-800 space-y-2.5">
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+            <Zap className="w-4 h-4 text-amber-400" />
+            Quick Setup Presets (Click to create or configure)
+          </span>
+          <span className="text-[11px] text-slate-400">Percentage & Fixed Tiers</span>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          <button
+            type="button"
+            onClick={() => applyPreset('Tier 1: 1% Bonus ($10+)', '10.00', '99.99', 'PERCENTAGE', '1.00', 'Deposit $10+ and get an instant 1% bankroll bonus!')}
+            className="p-2.5 bg-slate-950/80 hover:bg-indigo-950/50 rounded-xl border border-slate-800 hover:border-indigo-500 text-left transition"
+          >
+            <div className="font-bold text-xs text-white">$10+ → 1% Match</div>
+            <div className="text-[10px] text-indigo-400 mt-0.5">Tier 1 Entry Tier</div>
+          </button>
+          <button
+            type="button"
+            onClick={() => applyPreset('Tier 2: 2% Bonus ($100+)', '100.00', '499.99', 'PERCENTAGE', '2.00', 'Deposit $100+ and get an instant 2% bankroll bonus!')}
+            className="p-2.5 bg-slate-950/80 hover:bg-indigo-950/50 rounded-xl border border-slate-800 hover:border-indigo-500 text-left transition"
+          >
+            <div className="font-bold text-xs text-white">$100+ → 2% Match</div>
+            <div className="text-[10px] text-emerald-400 mt-0.5">Tier 2 Standard</div>
+          </button>
+          <button
+            type="button"
+            onClick={() => applyPreset('Tier 3: 5% Bonus ($500+)', '500.00', '999.99', 'PERCENTAGE', '5.00', 'Deposit $500+ and get an instant 5% bankroll bonus!')}
+            className="p-2.5 bg-slate-950/80 hover:bg-indigo-950/50 rounded-xl border border-slate-800 hover:border-indigo-500 text-left transition"
+          >
+            <div className="font-bold text-xs text-white">$500+ → 5% Match</div>
+            <div className="text-[10px] text-amber-400 mt-0.5">Tier 3 VIP Match</div>
+          </button>
+          <button
+            type="button"
+            onClick={() => applyPreset('Tier 4: 10% Bonus ($1,000+)', '1000.00', '', 'PERCENTAGE', '10.00', 'Deposit $1,000+ and get an instant 10% bankroll bonus!')}
+            className="p-2.5 bg-slate-950/80 hover:bg-indigo-950/50 rounded-xl border border-slate-800 hover:border-indigo-500 text-left transition"
+          >
+            <div className="font-bold text-xs text-white">$1,000+ → 10% Match</div>
+            <div className="text-[10px] text-purple-400 mt-0.5">Tier 4 Whale Tier</div>
+          </button>
+        </div>
+      </div>
+
+      {/* Bonus Tiers Table */}
+      <div className="space-y-3">
+        <div className="flex justify-between items-center bg-slate-900/40 p-3 rounded-xl border border-slate-800 text-xs text-slate-300">
+          <div>
+            <p className="font-semibold text-white">How Deposit Bonuses Work:</p>
+            <p className="text-slate-400 text-[11px] mt-0.5">
+              When a user completes a crypto deposit or fiat balance top-up, the matching tier calculates their bonus amount and credits it automatically in the same atomic ledger transaction.
+            </p>
+          </div>
+        </div>
+
+        <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-900/50">
+          <table className="w-full text-left text-xs">
+            <thead className="bg-slate-950 text-slate-400 uppercase text-[10px] tracking-wider border-b border-slate-800">
+              <tr>
+                <th className="p-3">Tier Name & Details</th>
+                <th className="p-3">Min Deposit Required</th>
+                <th className="p-3">Max Range Cap</th>
+                <th className="p-3">Bonus Reward</th>
+                <th className="p-3">Bonus Type</th>
+                <th className="p-3">Status</th>
+                <th className="p-3 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-800/60 font-medium">
+              {bonusTiers.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="p-6 text-center text-slate-500">
+                    No deposit bonus tiers configured yet. Click "Add Bonus Tier" or use a quick preset above.
+                  </td>
+                </tr>
+              ) : (
+                bonusTiers.map((tier) => (
+                  <tr key={tier.id} className="hover:bg-slate-800/30 transition">
+                    <td className="p-3">
+                      <div className="font-bold text-white flex items-center gap-1.5">
+                        <Gift className="w-3.5 h-3.5 text-indigo-400" />
+                        {tier.name}
+                      </div>
+                      <div className="text-[10px] text-slate-400 mt-0.5">{tier.description || 'Standard deposit match bonus'}</div>
+                    </td>
+                    <td className="p-3 font-mono font-bold text-slate-200">
+                      ${parseFloat(tier.min_deposit || 0).toFixed(2)} USD
+                    </td>
+                    <td className="p-3 font-mono text-slate-400">
+                      {tier.max_deposit ? `$${parseFloat(tier.max_deposit).toFixed(2)} USD` : 'No Max Limit'}
+                    </td>
+                    <td className="p-3 font-mono font-bold text-emerald-400 text-sm">
+                      {tier.bonus_type === 'PERCENTAGE' ? `+${tier.bonus_amount}% Match` : `+$${parseFloat(tier.bonus_amount || 0).toFixed(2)} USD`}
+                    </td>
+                    <td className="p-3">
+                      <Badge variant={tier.bonus_type === 'PERCENTAGE' ? 'primary' : 'neutral'} size="sm">
+                        {tier.bonus_type === 'PERCENTAGE' ? 'Percentage %' : 'Fixed USD $'}
+                      </Badge>
+                    </td>
+                    <td className="p-3">
+                      <Badge variant={tier.status === 'ACTIVE' ? 'success' : 'neutral'} size="sm">
+                        {tier.status}
+                      </Badge>
+                    </td>
+                    <td className="p-3 text-right">
+                      <div className="flex items-center justify-end gap-1.5">
+                        <Button size="sm" variant="outline" onClick={() => openEditBonusModal(tier)}>
+                          <Edit2 className="w-3 h-3 mr-1" /> Edit
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => handleDeleteBonusTier(tier.id)} className="text-rose-400 hover:text-rose-300">
+                          <Trash2 className="w-3 h-3" />
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* CREATE / EDIT BONUS TIER MODAL */}
+      {showBonusModal && (
+        <Modal
+          isOpen={showBonusModal}
+          onClose={() => setShowBonusModal(false)}
+          title={editingBonus ? `Edit Deposit Bonus Tier #${editingBonus.id}` : 'Create Deposit Bonus Tier'}
+        >
+          <form onSubmit={handleSaveBonusTier} className="space-y-4 text-left">
+            <div>
+              <label className="block text-xs font-semibold text-slate-300 mb-1">Tier Name</label>
+              <Input
+                value={bonusFormData.name}
+                onChange={e => setBonusFormData({ ...bonusFormData, name: e.target.value })}
+                placeholder="e.g., Tier 1: 1% Bonus ($10+) or VIP 5% Match"
+                required
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">Min Qualifying Deposit ($ USD)</label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  value={bonusFormData.min_deposit}
+                  onChange={e => setBonusFormData({ ...bonusFormData, min_deposit: e.target.value })}
+                  placeholder="10.00"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">Max Deposit Cap ($ USD - Optional)</label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  placeholder="Leave empty for unlimited"
+                  value={bonusFormData.max_deposit}
+                  onChange={e => setBonusFormData({ ...bonusFormData, max_deposit: e.target.value })}
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">Bonus Calculation Type</label>
+                <select
+                  value={bonusFormData.bonus_type}
+                  onChange={e => setBonusFormData({ ...bonusFormData, bonus_type: e.target.value })}
+                  className="w-full text-xs bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white"
+                >
+                  <option value="PERCENTAGE">Percentage Match (e.g. 1%, 2%, 5%)</option>
+                  <option value="FIXED">Fixed USD Cash (e.g. $10, $25, $50)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Bonus Value ({bonusFormData.bonus_type === 'PERCENTAGE' ? '% Match' : '$ USD'})
+                </label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  value={bonusFormData.bonus_amount}
+                  onChange={e => setBonusFormData({ ...bonusFormData, bonus_amount: e.target.value })}
+                  placeholder={bonusFormData.bonus_type === 'PERCENTAGE' ? '1.00' : '10.00'}
+                  required
+                />
+              </div>
+            </div>
+
+            {/* Live Calculation Preview Banner */}
+            <div className="p-3 bg-indigo-950/40 rounded-xl border border-indigo-500/30 text-xs">
+              <span className="text-slate-400 font-medium block mb-0.5">Live Crediting Example:</span>
+              <span className="text-emerald-400 font-bold font-mono">
+                {calculateSampleBonus()}
+              </span>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-300 mb-1">Description / Marketing Text for Users</label>
+              <Input
+                value={bonusFormData.description}
+                onChange={e => setBonusFormData({ ...bonusFormData, description: e.target.value })}
+                placeholder="e.g., Deposit $100 and claim an instant 2% bankroll bonus!"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-300 mb-1">Status</label>
+              <select
+                value={bonusFormData.status}
+                onChange={e => setBonusFormData({ ...bonusFormData, status: e.target.value })}
+                className="w-full text-xs bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white"
+              >
+                <option value="ACTIVE">ACTIVE (Claimable by Users)</option>
+                <option value="INACTIVE">INACTIVE (Hidden)</option>
+              </select>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-800">
+              <Button type="button" variant="outline" size="sm" onClick={() => setShowBonusModal(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" variant="primary" size="sm" isLoading={actionLoading} className="bg-indigo-600 hover:bg-indigo-500">
+                {editingBonus ? 'Update Bonus Tier' : 'Save & Activate Tier'}
+              </Button>
+            </div>
+          </form>
+        </Modal>
+      )}
     </div>
   );
 };

@@ -11,6 +11,7 @@ import { SecurityLogger } from '../services/securityLogger.js';
 import { accountService } from '../finance/accountService.js';
 import { balanceService } from '../finance/balanceService.js';
 import { financialTransactionService } from '../finance/transactionService.js';
+import { Decimal } from '../finance/decimal.js';
 import { logger } from '../logger.js';
 import { createResponse, createErrorResponse } from '../errorHandler.js';
 import crypto from 'crypto';
@@ -59,6 +60,256 @@ router.get('/games', (req: Request, res: Response) => {
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     res.status(500).json(createErrorResponse(msg));
+  }
+});
+
+// Dedicated Bet Placement & Stake Deduction Endpoint
+router.post(['/games/bet', '/games/bet.php'], authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const { stake, amount, bet_amount, currency = 'USD', game_slug = 'casino' } = req.body;
+    const betNum = parseFloat(stake ?? amount ?? bet_amount ?? 0);
+
+    if (isNaN(betNum) || betNum <= 0) {
+      return res.status(400).json(createErrorResponse('Bet amount must be greater than zero.'));
+    }
+
+    const availableAcc = accountService.getUserAccount(userId, 'USER_AVAILABLE', String(currency));
+    const gamesLiabilityAcc = accountService.getSystemAccount('SYSTEM_GAME_SETTLEMENT', String(currency));
+    const currentBal = balanceService.getAccountBalance(availableAcc.id);
+    const stakeDec = Decimal.fromString(betNum.toFixed(8));
+
+    if (currentBal.compareTo(stakeDec) < 0) {
+      return res.status(400).json(createErrorResponse(`Insufficient balance (${currentBal.toString()} ${currency}) for bet of ${betNum}`));
+    }
+
+    const idempotencyKey = `bet_${userId}_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    financialTransactionService.postTransaction(
+      {
+        transaction_type: 'GAME_BET',
+        currency: String(currency),
+        amount: stakeDec.toString(),
+        description: `Wager stake on game: ${game_slug}`,
+        idempotency_key: idempotencyKey,
+        created_by: userId
+      },
+      [
+        {
+          account_id: availableAcc.id,
+          entry_type: 'DEBIT',
+          amount: stakeDec.toString(),
+          description: `Debit available balance for game wager`
+        },
+        {
+          account_id: gamesLiabilityAcc.id,
+          entry_type: 'CREDIT',
+          amount: stakeDec.toString(),
+          description: `Credit game settlement pool`
+        }
+      ]
+    );
+
+    const newBal = balanceService.getAccountBalance(availableAcc.id);
+    const numericBal = parseFloat(newBal.toString());
+    res.json(createResponse({
+      success: true,
+      bet_id: Date.now(),
+      game_slug,
+      stake: betNum,
+      balance_after: numericBal,
+      new_balance: numericBal,
+      currency
+    }, 'Bet placed and stake deducted successfully.'));
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.error('FINANCE', `Error placing bet: ${msg}`);
+    res.status(400).json(createErrorResponse(msg));
+  }
+});
+
+// Dedicated Settlement Endpoint
+router.post(['/games/settle', '/games/settle.php'], authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const {
+      payout,
+      win,
+      amount,
+      bet,
+      stake,
+      currency = 'USD',
+      game_slug = 'casino'
+    } = req.body;
+
+    let payoutNum = parseFloat(payout ?? win ?? amount ?? 0);
+    const stakeNum = parseFloat(bet ?? stake ?? 0);
+    const availableAcc = accountService.getUserAccount(userId, 'USER_AVAILABLE', String(currency));
+    const gamesLiabilityAcc = accountService.getSystemAccount('SYSTEM_GAME_SETTLEMENT', String(currency));
+
+    // Authoritative Admin Win Rate (strictly 0% to 99%) Enforcement
+    const normalizedSlug = String(game_slug || '').toLowerCase().replace(/\s+/g, '-');
+    const gameEntity = dataStore.gameEntities.find(
+      g => g.slug === normalizedSlug || g.name.toLowerCase().replace(/\s+/g, '-') === normalizedSlug || g.id === Number(game_slug)
+    );
+    const winRateRaw = gameEntity?.configured_rtp_pct !== undefined ? parseFloat(gameEntity.configured_rtp_pct) : 96.0;
+    const winRate = Math.min(99.0, Math.max(0.0, isNaN(winRateRaw) ? 48.0 : winRateRaw));
+
+    let isWin = payoutNum > 0;
+    if (isWin) {
+      if (winRate <= 0.0) {
+        // 0% win rate: User NEVER wins
+        isWin = false;
+        payoutNum = 0;
+      } else if (winRate < 100.0) {
+        const roll = Math.random() * 100;
+        if (roll > winRate) {
+          isWin = false;
+          payoutNum = 0;
+        }
+      }
+    }
+
+    if (isWin && payoutNum > 0) {
+      const payoutDec = Decimal.fromString(payoutNum.toFixed(8));
+      const payoutKey = `payout_${userId}_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+      financialTransactionService.postTransaction(
+        {
+          transaction_type: 'GAME_PAYOUT',
+          currency: String(currency),
+          amount: payoutDec.toString(),
+          description: `Game win payout for ${game_slug}`,
+          idempotency_key: payoutKey,
+          created_by: userId
+        },
+        [
+          {
+            account_id: gamesLiabilityAcc.id,
+            entry_type: 'DEBIT',
+            amount: payoutDec.toString(),
+            description: `Debit game settlement pool for payout`
+          },
+          {
+            account_id: availableAcc.id,
+            entry_type: 'CREDIT',
+            amount: payoutDec.toString(),
+            description: `Credit user available balance for game winnings`
+          }
+        ]
+      );
+    }
+
+    const newBal = balanceService.getAccountBalance(availableAcc.id);
+    const numericBal = parseFloat(newBal.toString());
+    res.json(createResponse({
+      success: true,
+      payout: payoutNum,
+      stake: stakeNum,
+      is_win: isWin,
+      balance_after: numericBal,
+      new_balance: numericBal,
+      currency
+    }, isWin ? 'Round settled successfully.' : 'Outcome settled: Loss'));
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.error('FINANCE', `Error settling bet: ${msg}`);
+    res.status(400).json(createErrorResponse(msg));
+  }
+});
+
+// Dedicated Play Round Endpoint (all-in-one)
+router.post(['/games/play', '/games/play.php'], authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user!.id;
+    const { bet_amount, betAmount, multiplier = 2.0, is_win, currency = 'USD', game_id = '1' } = req.body;
+    const stake = parseFloat(bet_amount ?? betAmount ?? 0);
+
+    if (isNaN(stake) || stake <= 0) {
+      return res.status(400).json(createErrorResponse('Invalid bet amount.'));
+    }
+
+    const availableAcc = accountService.getUserAccount(userId, 'USER_AVAILABLE', String(currency));
+    const gamesLiabilityAcc = accountService.getSystemAccount('SYSTEM_GAME_SETTLEMENT', String(currency));
+    const currentBal = balanceService.getAccountBalance(availableAcc.id);
+    const stakeDec = Decimal.fromString(stake.toFixed(8));
+
+    if (currentBal.compareTo(stakeDec) < 0) {
+      return res.status(400).json(createErrorResponse(`Insufficient balance (${currentBal.toString()} ${currency})`));
+    }
+
+    // 1. Deduct stake
+    const betKey = `play_bet_${userId}_${Date.now()}`;
+    financialTransactionService.postTransaction(
+      {
+        transaction_type: 'GAME_BET',
+        currency: String(currency),
+        amount: stakeDec.toString(),
+        description: `Wager stake on game ${game_id}`,
+        idempotency_key: betKey,
+        created_by: userId
+      },
+      [
+        { account_id: availableAcc.id, entry_type: 'DEBIT', amount: stakeDec.toString(), description: 'Debit wager' },
+        { account_id: gamesLiabilityAcc.id, entry_type: 'CREDIT', amount: stakeDec.toString(), description: 'Credit pool' }
+      ]
+    );
+
+    // Look up game entity win rate configuration (strictly 0% - 99%)
+    const gameEntity = dataStore.gameEntities.find(
+      g => g.id === Number(game_id) || g.slug === String(game_id)
+    );
+    const winRateRaw = gameEntity?.configured_rtp_pct !== undefined ? parseFloat(gameEntity.configured_rtp_pct) : 96.0;
+    const winRate = Math.min(99.0, Math.max(0.0, isNaN(winRateRaw) ? 48.0 : winRateRaw));
+
+    let won = Boolean(is_win);
+    if (won) {
+      if (winRate <= 0.0) {
+        // 0% win rate: User NEVER wins
+        won = false;
+      } else if (winRate < 100.0) {
+        const roll = Math.random() * 100;
+        if (roll > winRate) {
+          won = false; // Outcome controlled by admin win rate
+        }
+      }
+    }
+
+    const multNum = parseFloat(multiplier) || 0;
+    const payoutNum = won ? Number((stake * multNum).toFixed(8)) : 0;
+
+    if (won && payoutNum > 0) {
+      const payoutDec = Decimal.fromString(payoutNum.toFixed(8));
+      const winKey = `play_win_${userId}_${Date.now()}`;
+      financialTransactionService.postTransaction(
+        {
+          transaction_type: 'GAME_PAYOUT',
+          currency: String(currency),
+          amount: payoutDec.toString(),
+          description: `Payout win (${multNum}x) on game ${game_id}`,
+          idempotency_key: winKey,
+          created_by: userId
+        },
+        [
+          { account_id: gamesLiabilityAcc.id, entry_type: 'DEBIT', amount: payoutDec.toString(), description: 'Debit pool' },
+          { account_id: availableAcc.id, entry_type: 'CREDIT', amount: payoutDec.toString(), description: 'Credit win' }
+        ]
+      );
+    }
+
+    const finalBal = balanceService.getAccountBalance(availableAcc.id);
+    const numericFinalBal = parseFloat(finalBal.toString());
+    res.json(createResponse({
+      is_win: won,
+      payout: payoutNum,
+      net_profit: won ? payoutNum - stake : -stake,
+      new_balance: numericFinalBal,
+      balance: numericFinalBal,
+      stake,
+      multiplier: multNum,
+      currency
+    }, won ? 'Congratulations, you won!' : 'Better luck next time!'));
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(400).json(createErrorResponse(msg));
   }
 });
 
@@ -141,15 +392,40 @@ router.post('/games/:id/settle', authMiddleware, (req: AuthenticatedRequest, res
       bet_id
     } = req.body;
 
-    const payoutNum = parseFloat(payout) || 0;
+    let payoutNum = parseFloat(payout) || 0;
     const stakeNum = parseFloat(stake) || 0;
-    const multNum = parseFloat(multiplier) || (stakeNum > 0 ? payoutNum / stakeNum : 0);
+    let multNum = parseFloat(multiplier) || (stakeNum > 0 ? payoutNum / stakeNum : 0);
 
     const availableAcc = accountService.getUserAccount(userId, 'USER_AVAILABLE', String(currency));
     const gamesLiabilityAcc = accountService.getSystemAccount('SYSTEM_GAME_SETTLEMENT', String(currency));
 
+    // Authoritative Admin Win Rate (strictly 0% to 99%) Enforcement
+    const normalizedSlug = String(req.params.id || '').toLowerCase().replace(/\s+/g, '-');
+    const gameEntity = dataStore.gameEntities.find(
+      g => g.slug === normalizedSlug || g.name.toLowerCase().replace(/\s+/g, '-') === normalizedSlug || g.id === Number(req.params.id)
+    );
+    const winRateRaw = gameEntity?.configured_rtp_pct !== undefined ? parseFloat(gameEntity.configured_rtp_pct) : 96.0;
+    const winRate = Math.min(99.0, Math.max(0.0, isNaN(winRateRaw) ? 48.0 : winRateRaw));
+
+    let effectiveWon = Boolean(won);
+    if (effectiveWon) {
+      if (winRate <= 0.0) {
+        // 0% win rate: User NEVER wins
+        effectiveWon = false;
+        payoutNum = 0;
+        multNum = 0;
+      } else if (winRate < 100.0) {
+        const roll = Math.random() * 100;
+        if (roll > winRate) {
+          effectiveWon = false;
+          payoutNum = 0;
+          multNum = 0;
+        }
+      }
+    }
+
     let payoutTxId: number | null = null;
-    if (won && payoutNum > 0) {
+    if (effectiveWon && payoutNum > 0) {
       const payoutKey = `payout_${userId}_${bet_id || Date.now()}_${Date.now()}`;
       const payoutTx = financialTransactionService.postTransaction(
         {
@@ -183,11 +459,11 @@ router.post('/games/:id/settle', authMiddleware, (req: AuthenticatedRequest, res
     if (bet) {
       bet.actual_payout = payoutNum.toFixed(8);
       bet.multiplier = multNum.toFixed(2);
-      bet.status = won ? 'WON' : 'LOST';
+      bet.status = effectiveWon ? 'WON' : 'LOST';
       bet.settled_at = new Date().toISOString();
       if (payoutTxId) bet.payout_ledger_transaction_id = payoutTxId;
     } else {
-      const game = dataStore.gameEntities.find(g => g.slug === req.params.id || g.id === Number(req.params.id));
+      const game = gameEntity || dataStore.gameEntities.find(g => g.slug === req.params.id || g.id === Number(req.params.id));
       const nextBetId = dataStore.gameBets.length > 0 ? Math.max(...dataStore.gameBets.map(b => b.id)) + 1 : 1;
       bet = {
         id: nextBetId,
@@ -197,12 +473,12 @@ router.post('/games/:id/settle', authMiddleware, (req: AuthenticatedRequest, res
         game_id: game ? game.id : 1,
         game_version: 1,
         currency: String(currency),
-        selection: String(outcome || (won ? 'WIN' : 'LOSS')),
+        selection: String(outcome || (effectiveWon ? 'WIN' : 'LOSS')),
         stake: stakeNum.toFixed(8),
         multiplier: multNum.toFixed(2),
         potential_payout: payoutNum.toFixed(8),
         actual_payout: payoutNum.toFixed(8),
-        status: won ? 'WON' : 'LOST',
+        status: effectiveWon ? 'WON' : 'LOST',
         ledger_transaction_id: 0,
         payout_ledger_transaction_id: payoutTxId,
         idempotency_key: `settle_${nextBetId}`,

@@ -4,7 +4,7 @@ import audio from '../utils/audioEngine.js';
 import { BettingButton } from '../../components/games/BettingButton.js';
 
 export default function MinesGame() {
-  const { state, placeBet, addWin, setGlobalBet } = useCasino();
+  const { state, placeBet, addWin, setGlobalBet, shouldGameWin } = useCasino();
   const [bet, setBet] = useState(state.globalBet || 10);
   const [mineCount, setMineCount] = useState(3);
   const [gridSize, setGridSize] = useState(5); // 3x3, 4x4, 5x5, 6x6
@@ -73,8 +73,15 @@ export default function MinesGame() {
   const revealTile = useCallback((idx) => {
     if (!playing || grid[idx].revealed) return;
 
+    const isWinAllowed = shouldGameWin ? shouldGameWin('mines') : true;
+
     const newGrid = [...grid];
     newGrid[idx] = { ...newGrid[idx], revealed: true };
+
+    // If 0% RTP / win disallowed, make this clicked tile a mine
+    if (!isWinAllowed) {
+      newGrid[idx].mine = true;
+    }
     setGrid(newGrid);
 
     // Admin cheat: treat mine as safe
@@ -99,7 +106,7 @@ export default function MinesGame() {
         cashout(newMult);
       }
     }
-  }, [playing, grid, revealed, mineCount, bet, addWin, totalTiles, minesCheats.noMines, godMode]);
+  }, [playing, grid, shouldGameWin, minesCheats.noMines, godMode, revealed, calculateMult, mineCount, totalTiles, bet, addWin]);
 
   const cashout = useCallback((mult = currentMult) => {
     if (!playing) return;

@@ -83,6 +83,7 @@ export const CryptoDepositModal: React.FC<CryptoDepositModalProps> = ({
   const [qrCodeUrl, setQrCodeUrl] = useState<string | null>(null);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [diagnosticsLogs, setDiagnosticsLogs] = useState<DiagnosticLogItem[]>([]);
+  const [bonusTiers, setBonusTiers] = useState<any[]>([]);
 
   const isIframe = typeof window !== 'undefined' && window.self !== window.top;
 
@@ -153,15 +154,26 @@ export const CryptoDepositModal: React.FC<CryptoDepositModalProps> = ({
       setLoadingCurrencies(true);
       setError(null);
       const token = getClientAuthToken();
-      const res = await fetch('/api/crypto/currencies', {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const data = await res.json();
-      if (res.ok && data.data) {
-        setCurrencies(data.data);
-        if (data.data.length > 0 && !selectedCurrency) {
-          const defaultCoin = data.data.find((c: any) => c.code === 'sol') || data.data[0];
-          setSelectedCurrency(defaultCoin);
+      const [res, bonusRes] = await Promise.allSettled([
+        fetch('/api/crypto/currencies', { headers: { Authorization: `Bearer ${token}` } }),
+        fetch('/api/deposit-bonus-tiers', { headers: { Authorization: `Bearer ${token}` } })
+      ]);
+
+      if (res.status === 'fulfilled') {
+        const data = await res.value.json();
+        if (res.value.ok && data.data) {
+          setCurrencies(data.data);
+          if (data.data.length > 0 && !selectedCurrency) {
+            const defaultCoin = data.data.find((c: any) => c.code === 'sol') || data.data[0];
+            setSelectedCurrency(defaultCoin);
+          }
+        }
+      }
+
+      if (bonusRes.status === 'fulfilled') {
+        const bonusData = await bonusRes.value.json();
+        if (bonusData?.data && Array.isArray(bonusData.data)) {
+          setBonusTiers(bonusData.data.filter((b: any) => b.status === 'ACTIVE'));
         }
       }
     } catch (err: unknown) {
@@ -170,6 +182,24 @@ export const CryptoDepositModal: React.FC<CryptoDepositModalProps> = ({
       setLoadingCurrencies(false);
     }
   };
+
+  // Compute matching deposit bonus
+  const matchedBonus = React.useMemo(() => {
+    const num = parseFloat(amountUsd);
+    if (isNaN(num) || num <= 0 || !bonusTiers.length) return null;
+    const sorted = [...bonusTiers].sort((a, b) => (parseFloat(b.min_deposit) || 0) - (parseFloat(a.min_deposit) || 0));
+    for (const tier of sorted) {
+      const min = parseFloat(tier.min_deposit) || 0;
+      const max = tier.max_deposit ? parseFloat(tier.max_deposit) : Infinity;
+      if (num >= min && num <= max) {
+        const bonusVal = tier.bonus_type === 'PERCENTAGE'
+          ? (num * (parseFloat(tier.bonus_amount) || 0)) / 100
+          : (parseFloat(tier.bonus_amount) || 0);
+        return { tier, bonusVal: Math.round(bonusVal * 100) / 100 };
+      }
+    }
+    return null;
+  }, [amountUsd, bonusTiers]);
 
   // Dynamically update minimum amount based on selected currency
   useEffect(() => {
@@ -969,6 +999,61 @@ export const CryptoDepositModal: React.FC<CryptoDepositModalProps> = ({
                   <span>Instant Verification</span>
                 </div>
               </div>
+
+              {/* Deposit Bonus Tiers Selector & Active Bonus Notice */}
+              {bonusTiers.length > 0 && (
+                <div className="p-3 bg-gradient-to-r from-amber-500/10 via-indigo-500/10 to-purple-500/10 rounded-xl border border-amber-500/20 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-amber-300 flex items-center gap-1.5">
+                      🎁 Deposit Match Bonus Active
+                    </span>
+                    {matchedBonus ? (
+                      <span className="text-[11px] font-bold text-emerald-400 bg-emerald-500/20 px-2 py-0.5 rounded-full border border-emerald-500/30">
+                        +${matchedBonus.bonusVal} USD Bonus Applied!
+                      </span>
+                    ) : (
+                      <span className="text-[10px] text-slate-400">
+                        Select a tier below to claim
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 pt-1">
+                    {bonusTiers.map((tier) => {
+                      const minD = parseFloat(tier.min_deposit) || 0;
+                      const isSelected = matchedBonus?.tier?.id === tier.id;
+                      return (
+                        <button
+                          key={tier.id}
+                          type="button"
+                          onClick={() => setAmountUsd(String(minD))}
+                          className={`p-2 rounded-lg text-left transition border ${
+                            isSelected
+                              ? 'bg-amber-500/20 border-amber-400 text-white shadow-sm'
+                              : 'bg-slate-900/60 border-slate-800 text-slate-300 hover:border-slate-700'
+                          }`}
+                        >
+                          <div className="text-[10px] font-medium text-slate-400">
+                            Deposit ${minD}+
+                          </div>
+                          <div className="text-xs font-bold text-amber-300">
+                            {tier.bonus_type === 'PERCENTAGE' ? `+${tier.bonus_amount}% Free` : `+$${tier.bonus_amount} Free`}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {matchedBonus && (
+                    <div className="text-[11px] text-slate-300 bg-slate-950/60 p-2 rounded-lg flex items-center justify-between">
+                      <span>Total Credited to Balance:</span>
+                      <span className="font-mono font-bold text-emerald-400">
+                        ${(parseFloat(amountUsd || '0') + matchedBonus.bonusVal).toFixed(2)} USD
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
 
               <Button
                 variant="primary"

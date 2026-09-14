@@ -1,5 +1,6 @@
 import { dataStore } from '../dataStore.js';
 import { accountService } from '../finance/accountService.js';
+import { balanceService } from '../finance/balanceService.js';
 import { financialTransactionService } from '../finance/transactionService.js';
 import { Decimal } from '../finance/decimal.js';
 import {
@@ -139,15 +140,23 @@ export class StakingService {
       throw new Error('No active version configured for this staking pool.');
     }
 
+    const effectiveCurrency = 'USD';
     const amount = Decimal.fromString(amountStr);
     const min = Decimal.fromString(version.minimum_stake);
     const max = Decimal.fromString(version.maximum_stake);
 
     if (amount.compareTo(min) < 0 || amount.compareTo(max) > 0) {
-      throw new Error(`Stake amount must be between ${version.minimum_stake} and ${version.maximum_stake} ${currency}`);
+      throw new Error(`Stake amount must be between $${version.minimum_stake} and $${version.maximum_stake} USD`);
     }
 
-    // 1. Check pool capacity if set
+    // 1. Check user available wallet balance (Authoritative Single Source of Truth)
+    const availableAcc = accountService.getUserAccount(userId, 'USER_AVAILABLE', effectiveCurrency);
+    const currentBal = balanceService.getAccountBalance(availableAcc.id);
+    if (currentBal.compareTo(amount) < 0) {
+      throw new Error(`Insufficient wallet balance. Available: $${currentBal.toString()} USD, Requested: $${amount.toString()} USD. Please deposit funds first.`);
+    }
+
+    // 2. Check pool capacity if set
     if (pool.max_pool_capacity) {
       const capacity = Decimal.fromString(pool.max_pool_capacity);
       const utilization = Decimal.fromString(pool.current_utilization);
@@ -156,18 +165,17 @@ export class StakingService {
       }
     }
 
-    // 2. Lock funds via double-entry ledger: USER_AVAILABLE -> USER_STAKING
-    const availableAcc = accountService.getUserAccount(userId, 'USER_AVAILABLE', currency);
-    const stakingAcc = accountService.getUserAccount(userId, 'USER_STAKING', currency);
-    const sysLiabilityAcc = accountService.getSystemAccount('SYSTEM_STAKING_LIABILITY', currency);
+    // 3. Lock funds via double-entry ledger: USER_AVAILABLE -> USER_STAKING
+    const stakingAcc = accountService.getUserAccount(userId, 'USER_STAKING', effectiveCurrency);
+    const sysLiabilityAcc = accountService.getSystemAccount('SYSTEM_STAKING_LIABILITY', effectiveCurrency);
 
     const idempotencyKey = `stake_create_${userId}_${poolId}_${Date.now()}`;
     const tx = financialTransactionService.postTransaction(
       {
         transaction_type: 'STAKING',
-        currency,
+        currency: effectiveCurrency,
         amount: amount.toString(),
-        description: `Stake ${amount.toString()} ${currency} in pool #${pool.id} (${pool.name})`,
+        description: `Stake $${amount.toString()} USD in pool #${pool.id} (${pool.name})`,
         idempotency_key: idempotencyKey,
         created_by: userId
       },
@@ -176,7 +184,7 @@ export class StakingService {
           account_id: availableAcc.id,
           entry_type: 'DEBIT',
           amount: amount.toString(),
-          description: `Debit available balance for staking principal`
+          description: `Debit available balance for USD staking principal`
         },
         {
           account_id: stakingAcc.id,

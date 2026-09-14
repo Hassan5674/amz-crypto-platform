@@ -13,6 +13,7 @@ import { adjustmentService } from '../finance/adjustmentService.js';
 import { reconciliationService } from '../finance/reconciliationService.js';
 import { FinancialTestSuite } from '../finance/testSuite.js';
 import { Decimal } from '../finance/decimal.js';
+import { ReferralService } from '../referral/referralService.js';
 import { logger } from '../logger.js';
 
 const router = Router();
@@ -202,6 +203,69 @@ router.post('/wallet/topup', authMiddleware, (req: AuthenticatedRequest, res: Re
         }
       ]
     );
+
+    // AUTOMATIC DEPOSIT BONUS PROCESSING: Check admin configured deposit bonus tiers
+    try {
+      const topupVal = parseFloat(amtDec.toString());
+      const matchingTier = dataStore.depositBonusTiers.find(tier => {
+        if (tier.status !== 'ACTIVE') return false;
+        const minD = parseFloat(tier.min_deposit);
+        const maxD = tier.max_deposit ? parseFloat(tier.max_deposit) : Infinity;
+        return topupVal >= minD && topupVal <= maxD;
+      });
+
+      if (matchingTier) {
+        const bonusRate = parseFloat(matchingTier.bonus_amount);
+        const bonusAmt = matchingTier.bonus_type === 'PERCENTAGE'
+          ? (topupVal * bonusRate) / 100
+          : bonusRate;
+
+        if (bonusAmt > 0) {
+          financialTransactionService.depositFunds(
+            userId,
+            bonusAmt.toFixed(2),
+            curr,
+            `Deposit Bonus: ${matchingTier.name} (+$${bonusAmt.toFixed(2)})`,
+            { tier_id: matchingTier.id, topup_tx_id: tx.id }
+          );
+
+          const nextBonusId = dataStore.userBonuses.length > 0
+            ? Math.max(...dataStore.userBonuses.map(b => b.id)) + 1
+            : 1;
+
+          dataStore.userBonuses.push({
+            id: nextBonusId,
+            public_reference: `bonus_ref_${Date.now()}_${nextBonusId}`,
+            user_id: userId,
+            campaign_id: 1,
+            bonus_type: 'DEPOSIT_BONUS',
+            amount: bonusAmt.toFixed(2),
+            currency: curr,
+            status: 'ACTIVE',
+            ledger_transaction_id: null,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+            expires_at: new Date(Date.now() + 30 * 86400000).toISOString()
+          });
+
+          logger.info('FINANCE', `Applied deposit bonus of $${bonusAmt.toFixed(2)} to user #${userId} based on Tier #${matchingTier.id} (${matchingTier.name})`);
+        }
+      }
+    } catch (bonusErr) {
+      logger.error('FINANCE', `Error processing deposit bonus for topup tx #${tx.id}: ${bonusErr}`);
+    }
+
+    // AUTOMATIC REFERRAL COMMISSION PROCESSING
+    try {
+      ReferralService.processQualifyingEvent(
+        userId,
+        'FIRST_DEPOSIT_CONFIRMED',
+        amtDec.toString(),
+        curr
+      );
+    } catch (refErr) {
+      logger.error('FINANCE', `Error calculating referral commission for topup: ${refErr}`);
+    }
 
     const balances = balanceService.recalculateBalance(userId, curr);
     res.json(createResponse({ transaction: tx, balances }, `Successfully topped up ${amtDec.toString()} ${curr}`));

@@ -32,7 +32,9 @@ export type QualifyingEventType =
   | 'FIRST_DEPOSIT_CONFIRMED'
   | 'QUALIFYING_DEPOSIT'
   | 'QUALIFYING_INVESTMENT'
-  | 'QUALIFYING_STAKE';
+  | 'QUALIFYING_STAKE'
+  | 'WAGER_SETTLED'
+  | 'STAKE_COMMITTED';
 
 export interface AffiliateCommissionRule {
   id: number;

@@ -81,26 +81,29 @@ function casinoReducer(state: CasinoState, action: CasinoAction): CasinoState {
     }
 
     case 'ADD_WIN': {
-      const netProfit = action.amount - action.bet;
-      const newBal = state.balance + action.amount;
-      const newStreak = state.currentStreak > 0 ? state.currentStreak + 1 : 1;
+      const isActualWin = action.amount > 0;
+      const netProfit = isActualWin ? action.amount - action.bet : -action.bet;
+      // Stake was already deducted during PLACE_BET. Winnings are added to current balance.
+      const newBal = state.balance + (isActualWin ? action.amount : 0);
+      const newStreak = isActualWin ? (state.currentStreak > 0 ? state.currentStreak + 1 : 1) : 0;
       const newHistoryItem: GameHistoryItem = {
-        id: `WIN-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        id: `${isActualWin ? 'WIN' : 'LOSS'}-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
         game: action.game,
         gameSlug: action.game.toLowerCase().replace(/\s+/g, '-'),
         bet: action.bet,
         win: action.amount,
         multiplier: action.multiplier,
         timestamp: new Date().toLocaleTimeString(),
-        won: true,
-        outcome: action.outcome || `Won +$${netProfit.toFixed(2)} (${action.multiplier.toFixed(2)}x)`
+        won: isActualWin,
+        outcome: action.outcome || (isActualWin ? `Won +$${netProfit.toFixed(2)} (${action.multiplier.toFixed(2)}x)` : `Lost -$${action.bet.toFixed(2)}`)
       };
 
       return {
         ...state,
         balance: newBal,
-        totalWins: state.totalWins + action.amount,
-        biggestWin: Math.max(state.biggestWin, action.amount),
+        totalWins: isActualWin ? state.totalWins + action.amount : state.totalWins,
+        totalLosses: !isActualWin ? state.totalLosses + action.bet : state.totalLosses,
+        biggestWin: isActualWin ? Math.max(state.biggestWin, action.amount) : state.biggestWin,
         currentStreak: newStreak,
         bestStreak: Math.max(state.bestStreak, newStreak),
         history: [newHistoryItem, ...state.history.slice(0, 49)]
@@ -108,6 +111,7 @@ function casinoReducer(state: CasinoState, action: CasinoAction): CasinoState {
     }
 
     case 'ADD_LOSS': {
+      // Balance was already deducted during PLACE_BET.
       const newHistoryItem: GameHistoryItem = {
         id: `LOSS-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
         game: action.game,
@@ -194,6 +198,10 @@ interface CasinoContextValue {
   refreshBackendBalance: () => Promise<void>;
   refreshBalance: () => Promise<void>;
   reloadPracticeChips: (amount?: number) => void;
+  getGameWinRate: (gameSlugOrName: string) => number;
+  shouldGameWin: (gameSlugOrName: string) => boolean;
+  checkWinAllowed: (gameSlugOrName: string) => boolean;
+  gameRtpConfigs: Record<string, number>;
 }
 
 const CasinoContext = createContext<CasinoContextValue | null>(null);
@@ -203,7 +211,56 @@ export const CasinoProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [winEffect, setWinEffect] = useState<WinCelebration | null>(null);
   const [insufficientFundsNotice, setInsufficientFundsNotice] = useState<InsufficientFundsNotice | null>(null);
   const [isDepositModalOpen, setIsDepositModalOpen] = useState(false);
+  const [gameRtpConfigs, setGameRtpConfigs] = useState<Record<string, number>>({});
   const { user, isAuthenticated } = useAuth();
+
+  // Sync game configurations (RTP, house edge) from server
+  const fetchGameConfigs = useCallback(async () => {
+    try {
+      const res = await fetch('/api/games');
+      if (res.ok) {
+        const json = await res.json();
+        const gamesList = json.data?.games || json.data || [];
+        if (Array.isArray(gamesList)) {
+          const map: Record<string, number> = {};
+          gamesList.forEach((g: any) => {
+            if (g.slug) {
+              const rtp = g.configured_rtp_pct !== undefined ? parseFloat(g.configured_rtp_pct) : 98.0;
+              map[g.slug.toLowerCase()] = isNaN(rtp) ? 98.0 : rtp;
+              if (g.name) {
+                map[g.name.toLowerCase().replace(/\s+/g, '-')] = isNaN(rtp) ? 98.0 : rtp;
+                map[g.name.toLowerCase()] = isNaN(rtp) ? 98.0 : rtp;
+              }
+            }
+          });
+          setGameRtpConfigs(map);
+        }
+      }
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    fetchGameConfigs();
+  }, [fetchGameConfigs]);
+
+  const getGameWinRate = useCallback((gameSlugOrName: string): number => {
+    const raw = String(gameSlugOrName || '').toLowerCase().trim();
+    const slug = raw.replace(/\s+/g, '-');
+    if (gameRtpConfigs[slug] !== undefined) return gameRtpConfigs[slug];
+    if (gameRtpConfigs[raw] !== undefined) return gameRtpConfigs[raw];
+    return 98.0;
+  }, [gameRtpConfigs]);
+
+  const shouldGameWin = useCallback((gameSlugOrName: string): boolean => {
+    const winRate = getGameWinRate(gameSlugOrName);
+    if (winRate <= 0) return false;
+    if (winRate >= 100) return true;
+    return (Math.random() * 100) < winRate;
+  }, [getGameWinRate]);
+
+  const checkWinAllowed = useCallback((gameSlugOrName: string): boolean => {
+    return shouldGameWin(gameSlugOrName);
+  }, [shouldGameWin]);
 
   // Dismiss notification
   const dismissInsufficientFundsNotice = useCallback(() => {
@@ -253,7 +310,9 @@ export const CasinoProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       });
       if (res.ok) {
         const data = await res.json();
-        const rawBal = data.data?.wallet?.balances?.available ??
+        const rawBal = data.data?.available ??
+          data.data?.balance ??
+          data.data?.wallet?.balances?.available ??
           data.data?.wallet?.available_balance ??
           data.data?.balances?.available ??
           data.data?.available_balance;
@@ -419,59 +478,6 @@ export const CasinoProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     return true;
   }, [state.balance, showInsufficientFundsNotification, dismissInsufficientFundsNotice, placeBet]);
 
-  const addWin = useCallback((amount: number, bet: number, game: string, multiplier: number, outcome?: string) => {
-    const winNum = Number(amount);
-    const betNum = Number(bet);
-    const multNum = Number(multiplier);
-
-    dispatch({ type: 'ADD_WIN', amount: winNum, bet: betNum, game, multiplier: multNum, outcome });
-
-    const profit = winNum - betNum;
-    if (multNum >= 10 || profit >= 500) {
-      audio.playBigWin();
-    } else if (multNum >= 2 || profit >= 50) {
-      audio.playWin();
-    } else {
-      audio.playCashout();
-    }
-
-    if (state.settings.winEffectsEnabled && (multNum >= 2 || profit >= 50)) {
-      setWinEffect({ profit, multiplier: multNum, game });
-    }
-
-    // Persist authoritative ledger payout if authenticated
-    if (isAuthenticated) {
-      const token = localStorage.getItem('apex_session_token') || localStorage.getItem('token') || localStorage.getItem('apex_token');
-      const gameSlug = game.toLowerCase().replace(/\s+/g, '-');
-      fetch(`/api/games/${gameSlug}/settle`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          won: true,
-          payout: winNum,
-          stake: betNum,
-          multiplier: multNum,
-          outcome: outcome || 'WIN',
-          currency: state.currency || 'USD'
-        })
-      })
-      .then(res => res.json())
-      .then(data => {
-        if (data.success && data.data?.new_balance) {
-          const nb = parseFloat(data.data.new_balance);
-          dispatch({ type: 'SET_BALANCE', balance: nb });
-          window.dispatchEvent(new CustomEvent('balance_updated', { detail: { balance: nb } }));
-        }
-      })
-      .catch(() => {
-        refreshBackendBalance().catch(() => {});
-      });
-    }
-  }, [state.settings.winEffectsEnabled, state.currency, isAuthenticated, refreshBackendBalance]);
-
   const addLoss = useCallback((amount: number, game: string, outcome?: string) => {
     const lossNum = Number(amount);
     dispatch({ type: 'ADD_LOSS', amount: lossNum, game, outcome });
@@ -509,6 +515,90 @@ export const CasinoProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       });
     }
   }, [state.currency, isAuthenticated, refreshBackendBalance]);
+
+  const addWin = useCallback((amount: number, bet: number, game: string, multiplier: number, outcome?: string) => {
+    let winNum = Number(amount);
+    const betNum = Number(bet);
+    let multNum = Number(multiplier);
+
+    // Live Authoritative Win Rate (0% to 100%) Check
+    const winRate = getGameWinRate(game);
+    let isWin = winNum > 0;
+
+    if (isWin) {
+      if (winRate <= 0) {
+        // 0% win rate: User NEVER wins
+        isWin = false;
+        winNum = 0;
+        multNum = 0;
+        outcome = outcome ? `${outcome} (House Edge 100%)` : 'Outcome settled: Loss (House edge 100%)';
+      } else if (winRate < 100) {
+        const roll = Math.random() * 100;
+        if (roll >= winRate) {
+          isWin = false;
+          winNum = 0;
+          multNum = 0;
+          outcome = outcome ? `${outcome} (House Edge)` : 'Outcome settled: Loss';
+        }
+      }
+    }
+
+    if (!isWin) {
+      addLoss(betNum, game, outcome);
+      return;
+    }
+
+    dispatch({ type: 'ADD_WIN', amount: winNum, bet: betNum, game, multiplier: multNum, outcome });
+
+    const profit = winNum - betNum;
+    if (winNum > 0) {
+      if (multNum >= 10 || profit >= 500) {
+        audio.playBigWin();
+      } else if (multNum >= 2 || profit >= 50) {
+        audio.playWin();
+      } else {
+        audio.playCashout();
+      }
+
+      if (state.settings.winEffectsEnabled && (multNum >= 2 || profit >= 50)) {
+        setWinEffect({ profit, multiplier: multNum, game });
+      }
+    } else {
+      audio.playLose();
+    }
+
+    // Persist authoritative ledger payout if authenticated
+    if (isAuthenticated) {
+      const token = localStorage.getItem('apex_session_token') || localStorage.getItem('token') || localStorage.getItem('apex_token');
+      const gameSlug = game.toLowerCase().replace(/\s+/g, '-');
+      fetch(`/api/games/${gameSlug}/settle`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          won: winNum > 0,
+          payout: winNum,
+          stake: betNum,
+          multiplier: multNum,
+          outcome: outcome || (winNum > 0 ? 'WIN' : 'LOSS'),
+          currency: state.currency || 'USD'
+        })
+      })
+      .then(res => res.json())
+      .then(data => {
+        const nb = parseFloat(data.data?.new_balance ?? data.data?.balance_after);
+        if (!isNaN(nb)) {
+          dispatch({ type: 'SET_BALANCE', balance: nb });
+          window.dispatchEvent(new CustomEvent('balance_updated', { detail: { balance: nb } }));
+        }
+      })
+      .catch(() => {
+        refreshBackendBalance().catch(() => {});
+      });
+    }
+  }, [getGameWinRate, addLoss, state.settings.winEffectsEnabled, state.currency, isAuthenticated, refreshBackendBalance]);
 
   const setGlobalBet = useCallback((amount: number) => {
     dispatch({ type: 'SET_GLOBAL_BET', amount: Number(amount) });
@@ -582,7 +672,11 @@ export const CasinoProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     clearWinEffect,
     refreshBackendBalance,
     refreshBalance: refreshBackendBalance,
-    reloadPracticeChips
+    reloadPracticeChips,
+    getGameWinRate,
+    shouldGameWin,
+    checkWinAllowed,
+    gameRtpConfigs
   }), [
     state,
     placeBet,
@@ -605,7 +699,11 @@ export const CasinoProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     winEffect,
     clearWinEffect,
     refreshBackendBalance,
-    reloadPracticeChips
+    reloadPracticeChips,
+    getGameWinRate,
+    shouldGameWin,
+    checkWinAllowed,
+    gameRtpConfigs
   ]);
 
   return (

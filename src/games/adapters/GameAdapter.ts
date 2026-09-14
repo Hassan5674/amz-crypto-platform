@@ -2,20 +2,21 @@ import { GameBetRequest, GameBetResult } from '../types.js';
 
 export class GameAdapter {
   /**
-   * Authoritative server-side bet placement and outcome resolution.
+   * Authoritative server-side bet placement and immediate stake deduction.
    */
   public static async placeServerBet(req: GameBetRequest): Promise<GameBetResult> {
     try {
-      const token = localStorage.getItem('token') || localStorage.getItem('apex_token') || '';
-      const response = await fetch(`/api/games/${req.gameSlug}/bet`, {
+      const token = localStorage.getItem('apex_session_token') || localStorage.getItem('token') || localStorage.getItem('apex_token') || '';
+      
+      const response = await fetch('/api/games/bet.php', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
+          game_slug: req.gameSlug,
           stake: req.stake,
-          selection: typeof req.selection === 'object' ? JSON.stringify(req.selection) : req.selection,
           currency: req.currency || 'USD',
           client_seed: req.clientSeed || `CS-${Date.now()}`
         })
@@ -35,28 +36,25 @@ export class GameAdapter {
           won: false,
           outcomeData: {},
           newBalance: 0,
-          errorMessage: data.error || data.message || 'Failed to place bet on authoritative backend'
+          errorMessage: data.message || 'Failed to place bet on MySQL authoritative backend'
         };
       }
 
-      const bet = data.data.bet;
-      const round = data.data.round;
+      const outcome = data.data || {};
+      const newBalance = Number(outcome.new_balance ?? outcome.balance_after ?? 0);
 
       return {
         success: true,
-        betId: bet.id,
-        roundReference: round.round_reference || bet.public_reference,
+        betId: outcome.bet_id || Date.now(),
+        roundReference: `ROUND-${Date.now()}`,
         gameSlug: req.gameSlug,
-        stake: parseFloat(bet.stake),
-        payout: parseFloat(bet.actual_payout),
-        multiplier: parseFloat(bet.multiplier),
-        won: bet.status === 'WON',
-        outcomeData: round.outcome_data || {},
-        newBalance: data.data.new_balance ? parseFloat(data.data.new_balance) : 0,
-        serverSeedHash: round.server_seed_hash,
-        revealedServerSeed: round.server_seed,
-        clientSeed: round.client_seed,
-        nonce: round.nonce
+        stake: req.stake,
+        payout: 0,
+        multiplier: 0,
+        won: false,
+        outcomeData: outcome,
+        newBalance: newBalance,
+        clientSeed: req.clientSeed
       };
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -70,6 +68,58 @@ export class GameAdapter {
         multiplier: 0,
         won: false,
         outcomeData: {},
+        newBalance: 0,
+        errorMessage: msg
+      };
+    }
+  }
+
+  /**
+   * Authoritative server-side win settlement and balance credit.
+   */
+  public static async settleServerWin(params: {
+    gameSlug: string;
+    payout: number;
+    bet: number;
+    currency?: string;
+    clientSeed?: string;
+  }): Promise<{ success: boolean; newBalance: number; errorMessage?: string }> {
+    try {
+      const token = localStorage.getItem('apex_session_token') || localStorage.getItem('token') || localStorage.getItem('apex_token') || '';
+      
+      const response = await fetch('/api/games/settle.php', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          game_slug: params.gameSlug,
+          payout: params.payout,
+          bet: params.bet,
+          currency: params.currency || 'USD',
+          client_seed: params.clientSeed
+        })
+      });
+
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        return {
+          success: false,
+          newBalance: 0,
+          errorMessage: data.message || 'Failed to settle win on backend'
+        };
+      }
+
+      const newBal = Number(data.data?.new_balance ?? data.data?.balance_after ?? 0);
+      return {
+        success: true,
+        newBalance: newBal
+      };
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return {
+        success: false,
         newBalance: 0,
         errorMessage: msg
       };

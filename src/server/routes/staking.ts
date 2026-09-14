@@ -236,6 +236,7 @@ router.post('/admin/staking-pools', authMiddleware, (req: AuthenticatedRequest, 
     }
 
     logger.info('FINANCE', `Admin #${req.user?.id || 1} created new staking pool #${nextId} (${name})`);
+    dataStore.saveState();
     res.status(201).json(createResponse({ ...newPool, active_version: newVersion }, 'Staking pool created successfully.'));
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -246,7 +247,7 @@ router.post('/admin/staking-pools', authMiddleware, (req: AuthenticatedRequest, 
 const handleUpdatePool = (req: AuthenticatedRequest, res: Response) => {
   try {
     const poolId = Number(req.params.id);
-    const { status, name, description, reward_rate, lock_period_days, min_stake } = req.body;
+    const { status, name, description, reward_rate, lock_period_days, min_stake, max_stake, symbol } = req.body;
     const pool = dataStore.stakingPoolEntities.find(p => p.id === poolId);
     if (!pool) {
       return res.status(404).json(createErrorResponse('Staking pool not found'));
@@ -254,6 +255,7 @@ const handleUpdatePool = (req: AuthenticatedRequest, res: Response) => {
     if (status) pool.status = status;
     if (name) pool.name = name;
     if (description) pool.description = description;
+    if (symbol) pool.asset = symbol;
 
     // Also update the active version values
     const version = dataStore.stakingPoolVersions.find(v => v.id === pool.current_version_id);
@@ -261,6 +263,7 @@ const handleUpdatePool = (req: AuthenticatedRequest, res: Response) => {
       if (reward_rate !== undefined) version.reward_rate = String(reward_rate);
       if (lock_period_days !== undefined) version.lock_period_days = Number(lock_period_days);
       if (min_stake !== undefined) version.minimum_stake = String(min_stake);
+      if (max_stake !== undefined) version.maximum_stake = String(max_stake);
     }
 
     // Synchronize legacy pool entry if present
@@ -270,15 +273,19 @@ const handleUpdatePool = (req: AuthenticatedRequest, res: Response) => {
       if (lp) {
         if (status) lp.status = status;
         if (name) lp.name = name;
+        if (symbol) lp.asset_symbol = symbol;
         if (reward_rate !== undefined) {
           lp.reward_rate = String(reward_rate);
           lp.estimated_apr_indicator = `${reward_rate}% (Daily Compounded)`;
         }
         if (lock_period_days !== undefined) lp.lockup_days = Number(lock_period_days);
+        if (min_stake !== undefined) lp.min_stake = parseFloat(min_stake) || 50;
+        if (max_stake !== undefined) lp.max_stake = parseFloat(max_stake) || 50000;
       }
     }
 
     logger.info('FINANCE', `Admin #${req.user?.id || 1} updated staking pool #${poolId}`);
+    dataStore.saveState();
     res.json(createResponse({ ...pool, active_version: version }, 'Staking pool successfully updated.'));
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -299,6 +306,7 @@ router.delete('/admin/staking-pools/:id', authMiddleware, (req: AuthenticatedReq
     }
     pool.status = 'PAUSED' as any;
     logger.info('FINANCE', `Admin #${req.user?.id || 1} paused/archived staking pool #${poolId}`);
+    dataStore.saveState();
     res.json(createResponse(pool, 'Staking pool paused successfully.'));
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);

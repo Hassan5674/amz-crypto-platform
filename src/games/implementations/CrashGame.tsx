@@ -4,7 +4,7 @@ import audio from '../utils/audioEngine.js';
 import { BettingButton } from '../../components/games/BettingButton.js';
 
 export default function CrashGame() {
-  const { state, play, placeBet, addWin, setGlobalBet } = useCasino();
+  const { state, play, placeBet, addWin, setGlobalBet, shouldGameWin } = useCasino();
   const [bet, setBet] = useState(state.globalBet || 10);
   const [autoCashout, setAutoCashout] = useState(2);
   const [playing, setPlaying] = useState(false);
@@ -28,8 +28,13 @@ export default function CrashGame() {
   // Admin settings
   const crashCheats = state.adminSettings?.gameSettings?.crash || {};
 
-  // Generate crash point with house edge ~3%
+  // Generate crash point with admin win rate control
   const generateCrashPoint = () => {
+    const isWinAllowed = shouldGameWin ? shouldGameWin('crash') : true;
+    if (!isWinAllowed) {
+      return 1.00; // Instant crash at 1.00x: user never wins
+    }
+
     // Admin cheat: force high crash point
     if (crashCheats.forceWin || state.adminSettings?.godMode) {
       return 10 + Math.random() * 90; // Always 10x-100x

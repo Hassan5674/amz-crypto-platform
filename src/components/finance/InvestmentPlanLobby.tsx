@@ -425,27 +425,37 @@ export const InvestmentPlanLobby: React.FC<InvestmentPlanLobbyProps> = ({ onView
               className="bg-slate-900/90 border border-slate-800 hover:border-slate-700 rounded-2xl overflow-hidden shadow-lg transition-all duration-300 flex flex-col justify-between hover:-translate-y-1 group"
             >
               <div>
-                {/* Visual Banner Header */}
-                <div className={`h-28 bg-gradient-to-r ${theme.banner} p-5 flex flex-col justify-between relative overflow-hidden`}>
+                {/* Visual Banner Header with Image Support */}
+                <div className={`h-36 bg-gradient-to-r ${theme.banner} p-5 flex flex-col justify-between relative overflow-hidden`}>
+                  {plan.image_url ? (
+                    <img
+                      src={plan.image_url}
+                      alt={plan.name}
+                      referrerPolicy="no-referrer"
+                      className="absolute inset-0 w-full h-full object-cover mix-blend-overlay opacity-60 group-hover:scale-105 transition-transform duration-500"
+                    />
+                  ) : null}
+                  <div className="absolute inset-0 bg-gradient-to-t from-slate-950/80 via-transparent to-black/30 pointer-events-none" />
+                  
                   <div className="absolute right-2 top-2 opacity-15 text-white pointer-events-none">
                     <TrendingUp className="w-24 h-24" />
                   </div>
                   
                   <div className="flex items-center justify-between z-10">
-                    <span className="px-2.5 py-1 bg-black/40 backdrop-blur-md text-white text-[11px] font-bold rounded-lg uppercase tracking-wider border border-white/10">
+                    <span className="px-2.5 py-1 bg-black/50 backdrop-blur-md text-white text-[11px] font-bold rounded-lg uppercase tracking-wider border border-white/10 shadow-sm">
                       {v?.return_model || 'FIXED RATE'}
                     </span>
-                    <span className="text-[11px] font-bold text-white bg-white/20 backdrop-blur-md px-2.5 py-1 rounded-lg border border-white/20">
+                    <span className="text-[11px] font-bold text-white bg-white/20 backdrop-blur-md px-2.5 py-1 rounded-lg border border-white/20 shadow-sm">
                       {v?.risk_level || 'CONSERVATIVE'}
                     </span>
                   </div>
 
                   <div className="z-10 flex items-baseline justify-between">
-                    <div className="text-2xl font-black text-white tracking-tight flex items-baseline gap-1">
+                    <div className="text-2xl font-black text-white tracking-tight flex items-baseline gap-1 drop-shadow-md">
                       <span>+{v?.return_rate}%</span>
                       <span className="text-xs font-medium text-white/80">Term Yield</span>
                     </div>
-                    <div className="flex items-center gap-1 text-xs font-semibold text-white/90 bg-black/30 px-2 py-0.5 rounded">
+                    <div className="flex items-center gap-1 text-xs font-semibold text-white/90 bg-black/50 backdrop-blur-md px-2.5 py-1 rounded-lg border border-white/10 shadow-sm">
                       <Clock className="w-3 h-3" />
                       <span>{v?.duration} Days</span>
                     </div>
@@ -522,6 +532,18 @@ export const InvestmentPlanLobby: React.FC<InvestmentPlanLobbyProps> = ({ onView
                 &times;
               </button>
             </div>
+
+            {selectedPlan.image_url && (
+              <div className="relative h-28 -mt-2 -mx-6 mb-4 overflow-hidden rounded-t-xl">
+                <img
+                  src={selectedPlan.image_url}
+                  alt={selectedPlan.name}
+                  referrerPolicy="no-referrer"
+                  className="w-full h-full object-cover"
+                />
+                <div className="absolute inset-0 bg-gradient-to-t from-slate-900 via-slate-900/40 to-transparent" />
+              </div>
+            )}
 
             {successMessage ? (
               <div className="p-6 bg-emerald-950/60 border border-emerald-800 rounded-xl text-center space-y-3">

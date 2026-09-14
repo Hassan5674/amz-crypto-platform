@@ -28,7 +28,8 @@ import {
   Landmark,
   Receipt,
   Scale,
-  Sliders
+  Sliders,
+  Gift
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.js';
 import { Avatar } from '../../components/ui/Avatar.js';
@@ -44,6 +45,7 @@ export type AdminViewId =
   | 'adjustments'
   | 'users'
   | 'deposits'
+  | 'deposit-bonuses'
   | 'withdrawals'
   | 'investment-plans'
   | 'investments'
@@ -95,13 +97,14 @@ export const AdminDashboardLayout: React.FC<AdminDashboardLayoutProps> = ({
     { id: 'adjustments', label: 'Manual Adjustments', icon: <Sliders className="w-4 h-4" />, requiredPerm: 'financial_adjustments.request' },
     { id: 'users', label: 'User Directory', icon: <Users className="w-4 h-4" />, requiredPerm: 'users.view' },
     { id: 'deposits', label: 'Deposits Review', icon: <ArrowDownCircle className="w-4 h-4" />, requiredPerm: 'deposits.view' },
+    { id: 'deposit-bonuses', label: 'Deposit Bonus Tiers', icon: <Gift className="w-4 h-4" />, requiredPerm: 'settings.view' },
     { id: 'withdrawals', label: 'Withdrawals Queue', icon: <ArrowUpCircle className="w-4 h-4" />, requiredPerm: 'withdrawals.view', badge: '1 Pending' },
     { id: 'investment-plans', label: 'Plan Catalog & Limits', icon: <TrendingUp className="w-4 h-4" />, requiredPerm: 'investment_plans.view' },
     { id: 'investments', label: 'All Investments', icon: <FolderKanban className="w-4 h-4" />, requiredPerm: 'investment_plans.view' },
     { id: 'staking', label: 'Staking Validator Pools', icon: <Coins className="w-4 h-4" />, requiredPerm: 'investment_plans.view' },
     { id: 'games', label: 'Games Management', icon: <Gamepad2 className="w-4 h-4" />, requiredPerm: 'games.view' },
     { id: 'game-history', label: 'Game Session Logs', icon: <History className="w-4 h-4" />, requiredPerm: 'games.view' },
-    { id: 'referrals', label: 'Referral Linkages', icon: <Share2 className="w-4 h-4" />, requiredPerm: 'reports.view' },
+    { id: 'referrals', label: 'Referrals & Affiliates', icon: <Share2 className="w-4 h-4" />, requiredPerm: 'reports.view' },
     { id: 'support', label: 'Support Ticket Queue', icon: <LifeBuoy className="w-4 h-4" />, requiredPerm: 'support.view', badge: '2 Open' },
     { id: 'kyc', label: 'KYC Verification Desk', icon: <UserCheck className="w-4 h-4" />, requiredPerm: 'users.view', badge: '1 Pending' },
     { id: 'risk', label: 'Risk & Anomaly Radar', icon: <ShieldAlert className="w-4 h-4" />, requiredPerm: 'reports.view' },

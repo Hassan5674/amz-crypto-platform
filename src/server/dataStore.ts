@@ -42,8 +42,51 @@ import {
   CryptoAssetConfig
 } from '../types/crypto.js';
 import { generateSecureToken, hashToken, generateNumericOtp, hashPassword } from './security.js';
+import fs from 'fs';
+import path from 'path';
 
 class DataStore {
+  constructor() {
+    this.loadState();
+  }
+
+  public saveState() {
+    try {
+      const dir = path.join(process.cwd(), 'config');
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      const state = {
+        stakingPoolEntities: this.stakingPoolEntities,
+        stakingPoolVersions: this.stakingPoolVersions,
+        userStakes: this.userStakes,
+        depositBonusTiers: this.depositBonusTiers,
+        affiliateCommissionRules: this.affiliateCommissionRules,
+        userBonuses: this.userBonuses
+      };
+      fs.writeFileSync(path.join(dir, 'datastore_state.json'), JSON.stringify(state, null, 2), 'utf-8');
+    } catch (e) {
+      console.error('Failed to save datastore state:', e);
+    }
+  }
+
+  public loadState() {
+    try {
+      const stateFile = path.join(process.cwd(), 'config', 'datastore_state.json');
+      if (fs.existsSync(stateFile)) {
+        const raw = fs.readFileSync(stateFile, 'utf-8');
+        const state = JSON.parse(raw);
+        if (state.stakingPoolEntities) this.stakingPoolEntities = state.stakingPoolEntities;
+        if (state.stakingPoolVersions) this.stakingPoolVersions = state.stakingPoolVersions;
+        if (state.userStakes) this.userStakes = state.userStakes;
+        if (state.depositBonusTiers) this.depositBonusTiers = state.depositBonusTiers;
+        if (state.affiliateCommissionRules) this.affiliateCommissionRules = state.affiliateCommissionRules;
+        if (state.userBonuses) this.userBonuses = state.userBonuses;
+      }
+    } catch (e) {
+      console.error('Failed to load datastore state:', e);
+    }
+  }
   // Phase 3 Double-Entry Financial Ledger Datastores
   public wallets: Wallet[] = [];
   public ledgerAccounts: LedgerAccount[] = [];
@@ -456,6 +499,7 @@ class DataStore {
       name: 'Secure Term Growth Note',
       slug: 'secure-term-growth',
       description: 'Low-duration, fixed-return term note backed by senior secured corporate receivables and short-term debt instruments.',
+      image_url: 'https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?w=600&auto=format&fit=crop&q=80',
       currency: 'USD',
       current_version_id: 1,
       status: 'ACTIVE',
@@ -469,6 +513,7 @@ class DataStore {
       name: 'Apex High-Yield Fixed Term',
       slug: 'apex-high-yield',
       description: 'Medium-term growth vehicle optimized for capital appreciation with fixed quarterly return accruals.',
+      image_url: 'https://images.unsplash.com/photo-1590283603385-17ffb3a7f29f?w=600&auto=format&fit=crop&q=80',
       currency: 'USD',
       current_version_id: 2,
       status: 'ACTIVE',
@@ -482,6 +527,7 @@ class DataStore {
       name: 'Venture Alpha Fund',
       slug: 'venture-alpha-fund',
       description: 'Long-term equity linked growth fund targeting strategic market opportunities with structured maturity releases.',
+      image_url: 'https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?w=600&auto=format&fit=crop&q=80',
       currency: 'USD',
       current_version_id: 3,
       status: 'ACTIVE',
@@ -623,6 +669,23 @@ class DataStore {
       created_at: '2026-09-01T00:00:00Z',
       updated_at: '2026-09-01T00:00:00Z',
       last_login_at: '2026-09-08T18:00:00Z'
+    },
+    {
+      id: 4,
+      uuid: 'u-cutepari-004',
+      name: 'Cute Pari',
+      username: 'cutepari',
+      email: 'cutepari886@gmail.com',
+      phone: '+1 555 019 8888',
+      password_hash: hashPassword('ApexAdmin2026!'),
+      avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+      status: 'ACTIVE',
+      email_verified_at: '2026-09-01T00:00:00Z',
+      phone_verified_at: '2026-09-01T00:00:00Z',
+      two_factor_enabled: false,
+      created_at: '2026-09-01T00:00:00Z',
+      updated_at: '2026-09-01T00:00:00Z',
+      last_login_at: '2026-09-13T12:00:00Z'
     }
   ];
   public profiles: UserProfile[] = [
@@ -826,45 +889,45 @@ class DataStore {
   public stakingPoolEntities: import('../types/staking.js').StakingPool[] = [
     {
       id: 1,
-      public_id: 'pool_eth_val',
-      name: 'Ethereum Proof-of-Stake Validator',
-      slug: 'ethereum-pos-validator',
-      description: 'Institutional validator staking pool generating native network consensus rewards with secure epoch settlement.',
-      asset: 'ETH',
+      public_id: 'pool_usd_yield',
+      name: 'USD High-Yield Liquidity Staking',
+      slug: 'usd-high-yield-liquidity',
+      description: 'Institutional USD yield pool generating fixed daily reward distributions with guaranteed dollar principal settlement.',
+      asset: 'USD',
       currency: 'USD',
       current_version_id: 1,
       status: 'ACTIVE',
       display_order: 1,
-      max_pool_capacity: '10000.00000000',
-      current_utilization: '1420.00000000',
+      max_pool_capacity: '1000000.00000000',
+      current_utilization: '142000.00000000',
       created_by: 1,
       created_at: '2025-01-10T00:00:00Z',
       updated_at: '2025-01-10T00:00:00Z'
     },
     {
       id: 2,
-      public_id: 'pool_sol_node',
-      name: 'Solana High-Throughput Node',
-      slug: 'solana-node-staking',
-      description: 'High-performance Solana validator staking pool optimized for epoch block rewards.',
-      asset: 'SOL',
+      public_id: 'pool_usd_apex',
+      name: 'USD Apex 30-Day Growth Staking',
+      slug: 'usd-apex-growth',
+      description: 'Optimized 30-day fixed term USD delegator staking with high annual percentage yields and daily compounding.',
+      asset: 'USD',
       currency: 'USD',
       current_version_id: 2,
       status: 'ACTIVE',
       display_order: 2,
-      max_pool_capacity: '50000.00000000',
-      current_utilization: '28450.00000000',
+      max_pool_capacity: '5000000.00000000',
+      current_utilization: '1284500.00000000',
       created_by: 1,
       created_at: '2025-01-15T00:00:00Z',
       updated_at: '2025-02-01T00:00:00Z'
     },
     {
       id: 3,
-      public_id: 'pool_usdc_reserve',
-      name: 'USD Stablecoin Liquidity Reserve',
-      slug: 'usd-stablecoin-reserve',
-      description: 'Short-duration stablecoin liquidity pool backed by high-grade secured commercial paper equivalents.',
-      asset: 'USDC',
+      public_id: 'pool_usd_flexible',
+      name: 'USD Flexible Daily Cash Staking',
+      slug: 'usd-flexible-daily',
+      description: 'Short-duration, flexible liquidity USD staking pool with instant daily compounding and no lock penalty.',
+      asset: 'USD',
       currency: 'USD',
       current_version_id: 3,
       status: 'ACTIVE',
@@ -883,10 +946,10 @@ class DataStore {
       pool_id: 1,
       version_number: 1,
       reward_model: 'FIXED_RATE',
-      reward_rate: '4.20',
+      reward_rate: '12.50',
       reward_frequency: 'DAILY',
-      minimum_stake: '0.10000000',
-      maximum_stake: '32.00000000',
+      minimum_stake: '10.00000000',
+      maximum_stake: '25000.00000000',
       lock_period_days: 60,
       cooldown_period_days: 7,
       early_unstake_allowed: true,
@@ -906,10 +969,10 @@ class DataStore {
       pool_id: 2,
       version_number: 1,
       reward_model: 'FIXED_RATE',
-      reward_rate: '6.80',
+      reward_rate: '18.00',
       reward_frequency: 'DAILY',
-      minimum_stake: '1.00000000',
-      maximum_stake: '500.00000000',
+      minimum_stake: '50.00000000',
+      maximum_stake: '50000.00000000',
       lock_period_days: 30,
       cooldown_period_days: 3,
       early_unstake_allowed: true,
@@ -929,14 +992,14 @@ class DataStore {
       pool_id: 3,
       version_number: 1,
       reward_model: 'FIXED_RATE',
-      reward_rate: '5.20',
+      reward_rate: '8.50',
       reward_frequency: 'DAILY',
-      minimum_stake: '100.00000000',
+      minimum_stake: '5.00000000',
       maximum_stake: '100000.00000000',
-      lock_period_days: 90,
+      lock_period_days: 15,
       cooldown_period_days: 1,
-      early_unstake_allowed: false,
-      early_unstake_fee: '0.00',
+      early_unstake_allowed: true,
+      early_unstake_fee: '1.00',
       compound_enabled: true,
       claim_enabled: true,
       unstake_enabled: true,
@@ -970,13 +1033,45 @@ class DataStore {
   public affiliateCommissionRules: import('../types/referral.js').AffiliateCommissionRule[] = [
     {
       id: 1,
-      name: 'First Deposit Affiliate Commission',
+      name: 'Deposit Affiliate Commission',
       event_type: 'FIRST_DEPOSIT_CONFIRMED',
       calculation_type: 'PERCENTAGE',
-      rate: '5.00',
+      rate: '10.00',
       fixed_amount: '0.00',
-      minimum_event_amount: '50.00',
+      minimum_event_amount: '10.00',
       maximum_commission: '500.00',
+      currency: 'USD',
+      status: 'ACTIVE',
+      version: 1,
+      created_by: 1,
+      created_at: '2025-01-10T00:00:00Z',
+      updated_at: '2025-01-10T00:00:00Z'
+    },
+    {
+      id: 2,
+      name: 'Gaming Wager Referral Commission',
+      event_type: 'WAGER_SETTLED',
+      calculation_type: 'PERCENTAGE',
+      rate: '2.50',
+      fixed_amount: '0.00',
+      minimum_event_amount: '1.00',
+      maximum_commission: '250.00',
+      currency: 'USD',
+      status: 'ACTIVE',
+      version: 1,
+      created_by: 1,
+      created_at: '2025-01-10T00:00:00Z',
+      updated_at: '2025-01-10T00:00:00Z'
+    },
+    {
+      id: 3,
+      name: 'Staking Delegation Referral Commission',
+      event_type: 'STAKE_COMMITTED',
+      calculation_type: 'PERCENTAGE',
+      rate: '3.00',
+      fixed_amount: '0.00',
+      minimum_event_amount: '10.00',
+      maximum_commission: '300.00',
       currency: 'USD',
       status: 'ACTIVE',
       version: 1,
@@ -986,6 +1081,65 @@ class DataStore {
     }
   ];
   public affiliateCommissions: import('../types/referral.js').AffiliateCommission[] = [];
+
+  // Admin Configurable Deposit Bonus Tiers
+  public depositBonusTiers: Array<{
+    id: number;
+    name: string;
+    min_deposit: string;
+    max_deposit?: string;
+    bonus_amount: string;
+    bonus_type: 'FIXED' | 'PERCENTAGE';
+    status: 'ACTIVE' | 'INACTIVE';
+    description: string;
+    created_at: string;
+  }> = [
+    {
+      id: 1,
+      name: 'Deposit $100 -> Get $10 Bonus',
+      min_deposit: '100.00',
+      max_deposit: '199.99',
+      bonus_amount: '10.00',
+      bonus_type: 'FIXED',
+      status: 'ACTIVE',
+      description: 'Deposit $100 - $199.99 to get an instant $10.00 cash bonus credited directly to your wallet.',
+      created_at: '2025-01-01T00:00:00Z'
+    },
+    {
+      id: 2,
+      name: 'Deposit $200 -> Get $30 Bonus',
+      min_deposit: '200.00',
+      max_deposit: '499.99',
+      bonus_amount: '30.00',
+      bonus_type: 'FIXED',
+      status: 'ACTIVE',
+      description: 'Deposit $200 - $499.99 to receive an instant $30.00 cash bonus.',
+      created_at: '2025-01-01T00:00:00Z'
+    },
+    {
+      id: 3,
+      name: 'Deposit $500 -> Get $100 Bonus',
+      min_deposit: '500.00',
+      max_deposit: '999.99',
+      bonus_amount: '100.00',
+      bonus_type: 'FIXED',
+      status: 'ACTIVE',
+      description: 'Deposit $500 - $999.99 to receive an instant $100.00 cash bonus.',
+      created_at: '2025-01-01T00:00:00Z'
+    },
+    {
+      id: 4,
+      name: 'VIP High Roller Deposit $1,000+ -> Get $250 Bonus',
+      min_deposit: '1000.00',
+      max_deposit: undefined,
+      bonus_amount: '250.00',
+      bonus_type: 'FIXED',
+      status: 'ACTIVE',
+      description: 'Deposit $1,000 or more to receive a premier $250.00 deposit bonus.',
+      created_at: '2025-01-01T00:00:00Z'
+    }
+  ];
+
   public bonusCampaigns: import('../types/referral.js').BonusCampaign[] = [
     {
       id: 1,

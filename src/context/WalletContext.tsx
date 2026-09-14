@@ -45,15 +45,22 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       }
 
       const json = await res.json();
-      if (json.success && json.data?.wallet?.balances?.available !== undefined) {
-        const avail = parseFloat(json.data.wallet.balances.available);
-        if (!isNaN(avail)) {
-          setBalance(avail);
-          if (json.data.wallet.currency) {
-            setCurrency(json.data.wallet.currency);
+      if (json.success && json.data) {
+        const rawBal = json.data.available ??
+          json.data.balance ??
+          json.data.wallet?.balances?.available ??
+          json.data.wallet?.available_balance ??
+          json.data.balances?.available;
+        if (rawBal !== undefined) {
+          const avail = parseFloat(rawBal);
+          if (!isNaN(avail)) {
+            setBalance(avail);
+            if (json.data.currency || json.data.wallet?.currency) {
+              setCurrency(json.data.currency || json.data.wallet.currency);
+            }
+            setIsLoading(false);
+            return avail;
           }
-          setIsLoading(false);
-          return avail;
         }
       }
       setIsLoading(false);

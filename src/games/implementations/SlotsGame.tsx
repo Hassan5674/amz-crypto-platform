@@ -75,7 +75,7 @@ const getPaytable = (volatilityKey) => {
 };
 
 export default function SlotsGame() {
-  const { state, placeBet, addWin, setGlobalBet } = useCasino();
+  const { state, placeBet, addWin, setGlobalBet, shouldGameWin } = useCasino();
   const [bet, setBet] = useState(state.globalBet || 10);
   const [reelCount, setReelCount] = useState(5);
   const [rowCount, setRowCount] = useState(3);
@@ -163,8 +163,24 @@ export default function SlotsGame() {
     return { totalMult, winLines };
   };
 
-  // Generate final reels with volatility-based win chance
+  // Generate final reels with volatility-based win chance and admin RTP control
   const generateFinalReels = () => {
+    const isWinAllowed = shouldGameWin ? shouldGameWin('slots') : true;
+
+    if (!isWinAllowed) {
+      // Force non-matching losing symbols across reels
+      const symbolsNoMatch = ['🍒', '🍋', '🍊', '🍇', '💎'];
+      const newReels = [];
+      for (let r = 0; r < reelCount; r++) {
+        const col = [];
+        for (let row = 0; row < rowCount; row++) {
+          col.push(symbolsNoMatch[(r + row) % symbolsNoMatch.length]);
+        }
+        newReels.push(col);
+      }
+      return newReels;
+    }
+
     const winChance = VOLATILITY[volatility].winChance;
 
     // Only force a win based on actual win chance (much lower now)

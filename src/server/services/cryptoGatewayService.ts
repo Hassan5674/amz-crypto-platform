@@ -4,6 +4,7 @@ import { nowPaymentsService, normalizeCurrencyCode, VERIFIED_COIN_MINIMUMS } fro
 import { financialTransactionService } from '../finance/transactionService.js';
 import { balanceService } from '../finance/balanceService.js';
 import { accountService } from '../finance/accountService.js';
+import { ReferralService } from '../referral/referralService.js';
 import { Decimal } from '../finance/decimal.js';
 import { logger } from '../logger.js';
 import { securityEventService } from './securityEventService.js';
@@ -313,6 +314,71 @@ export class CryptoGatewayService {
 
       order.status = paidDec.greaterThan(expectedDec) ? 'OVERPAID' : 'FINISHED';
       order.ledger_transaction_id = ledgerTx.id;
+
+      // AUTOMATIC DEPOSIT BONUS PROCESSING: Check admin configured deposit bonus tiers
+      try {
+        const depositVal = parseFloat(creditAmountUsd);
+        const matchingTier = dataStore.depositBonusTiers.find(tier => {
+          if (tier.status !== 'ACTIVE') return false;
+          const minD = parseFloat(tier.min_deposit);
+          const maxD = tier.max_deposit ? parseFloat(tier.max_deposit) : Infinity;
+          return depositVal >= minD && depositVal <= maxD;
+        });
+
+        if (matchingTier) {
+          const bonusRate = parseFloat(matchingTier.bonus_amount);
+          const bonusAmt = matchingTier.bonus_type === 'PERCENTAGE'
+            ? (depositVal * bonusRate) / 100
+            : bonusRate;
+
+          if (bonusAmt > 0) {
+            const bonusKey = `deposit_bonus_tier_${matchingTier.id}_order_${order.id}`;
+            financialTransactionService.depositFunds(
+              order.user_id,
+              bonusAmt.toFixed(2),
+              'USD',
+              `Deposit Bonus: ${matchingTier.name} (+$${bonusAmt.toFixed(2)})`,
+              { tier_id: matchingTier.id, deposit_order_id: order.id },
+              bonusKey
+            );
+
+            const nextBonusId = dataStore.userBonuses.length > 0
+              ? Math.max(...dataStore.userBonuses.map(b => b.id)) + 1
+              : 1;
+
+            dataStore.userBonuses.push({
+              id: nextBonusId,
+              public_reference: `bonus_ref_${Date.now()}_${nextBonusId}`,
+              user_id: order.user_id,
+              campaign_id: 1,
+              bonus_type: 'DEPOSIT_BONUS',
+              amount: bonusAmt.toFixed(2),
+              currency: 'USD',
+              status: 'ACTIVE',
+              ledger_transaction_id: null,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+              expires_at: new Date(Date.now() + 30 * 86400000).toISOString()
+            });
+
+            logger.info('FINANCE', `Applied deposit bonus of $${bonusAmt.toFixed(2)} to user #${order.user_id} based on Tier #${matchingTier.id} (${matchingTier.name})`);
+          }
+        }
+      } catch (bonusErr) {
+        logger.error('FINANCE', `Error processing deposit bonus for order #${order.id}: ${bonusErr}`);
+      }
+
+      // AUTOMATIC REFERRAL COMMISSION PROCESSING: Trigger referral qualifying deposit event
+      try {
+        ReferralService.processQualifyingEvent(
+          order.user_id,
+          'FIRST_DEPOSIT_CONFIRMED',
+          creditAmountUsd,
+          'USD'
+        );
+      } catch (refErr) {
+        logger.error('FINANCE', `Error calculating referral commission for order #${order.id}: ${refErr}`);
+      }
 
       // Record high-priority security audit log
       securityEventService.record({

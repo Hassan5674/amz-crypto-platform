@@ -252,6 +252,34 @@ try {
     }
 } catch (\Exception $e) {}
 
+// Ensure regular user cutepari886@gmail.com exists for testing
+try {
+    $userEmail = 'cutepari886@gmail.com';
+    $chkU = $pdo->prepare("SELECT id FROM users WHERE email = ? LIMIT 1");
+    $chkU->execute([$userEmail]);
+    if (!$chkU->fetch()) {
+        $pwdColU = isset($userColumns['password_hash']) ? 'password_hash' : 'password';
+        $hashedU = password_hash('ApexAdmin2026!', PASSWORD_DEFAULT);
+
+        $fieldsU = ['name', 'email', $pwdColU, 'status'];
+        $valsU = ['Cute Pari', $userEmail, $hashedU, 'ACTIVE'];
+
+        if (isset($userColumns['uuid'])) { $fieldsU[] = 'uuid'; $valsU[] = 'u-cutepari-002'; }
+        if (isset($userColumns['username'])) { $fieldsU[] = 'username'; $valsU[] = 'cutepari'; }
+        if (isset($userColumns['email_verified_at'])) { $fieldsU[] = 'email_verified_at'; $valsU[] = date('Y-m-d H:i:s'); }
+        if (isset($userColumns['role'])) { $fieldsU[] = 'role'; $valsU[] = 'USER'; }
+
+        $fListU = implode(', ', $fieldsU);
+        $pListU = implode(', ', array_fill(0, count($fieldsU), '?'));
+        $insU = $pdo->prepare("INSERT INTO users ($fListU) VALUES ($pListU)");
+        $insU->execute($valsU);
+        $newUserId = $pdo->lastInsertId();
+        if ($newUserId) {
+            $pdo->prepare("INSERT IGNORE INTO wallets (user_id, currency, available_balance) VALUES (?, 'USD', 1000.00)")->execute([$newUserId]);
+        }
+    }
+} catch (\Exception $e) {}
+
 // 3. Helper Functions
 function getBearerToken() {
     $headers = '';
@@ -1433,6 +1461,148 @@ if ($section === 'crypto' && $action === 'currencies') {
 }
 
 // ------------------------------------------------------------------------------
+// ROUTE: /api/admin/investment-plans (CRUD)
+// ------------------------------------------------------------------------------
+if ($section === 'admin' && $action === 'investment-plans') {
+    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+        $name = trim($input['name'] ?? '');
+        $description = trim($input['description'] ?? '');
+        $returnRate = floatval($input['return_rate'] ?? 5.0);
+        $durationDays = intval($input['duration_days'] ?? 30);
+        $minAmount = floatval($input['min_amount'] ?? 10.0);
+        $maxAmount = floatval($input['max_amount'] ?? 10000.0);
+        $riskLevel = strtoupper($input['risk_level'] ?? 'CONSERVATIVE');
+
+        if (empty($name)) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'message' => 'Plan name is required.']);
+            exit;
+        }
+
+        try {
+            $slug = strtolower(trim(preg_replace('/[^A-Za-z0-9-]+/', '-', $name), '-'));
+            $publicId = 'plan_' . $slug . '_' . time();
+            $ins = $pdo->prepare("INSERT INTO investment_plans (public_id, name, slug, description, currency, return_rate, duration_days, lock_period_days, min_amount, max_amount, risk_level, status) VALUES (?, ?, ?, ?, 'USD', ?, ?, ?, ?, ?, ?, 'ACTIVE')");
+            $ins->execute([$publicId, $name, $slug, $description, $returnRate, $durationDays, $durationDays, $minAmount, $maxAmount, $riskLevel]);
+            echo json_encode(['success' => true, 'message' => 'Investment plan created successfully.']);
+        } catch (\Exception $e) {
+            http_response_code(500);
+            echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+        }
+        exit;
+    }
+
+    if ($_SERVER['REQUEST_METHOD'] === 'PUT' && isset($segments[2]) && is_numeric($segments[2])) {
+        $planId = intval($segments[2]);
+        $name = trim($input['name'] ?? '');
+        $description = trim($input['description'] ?? '');
+        $returnRate = floatval($input['return_rate'] ?? 5.0);
+        $durationDays = intval($input['duration_days'] ?? 30);
+        $minAmount = floatval($input['min_amount'] ?? 10.0);
+        $maxAmount = floatval($input['max_amount'] ?? 10000.0);
+        $status = strtoupper($input['status'] ?? 'ACTIVE');
+
+        try {
+            $upd = $pdo->prepare("UPDATE investment_plans SET name = ?, description = ?, return_rate = ?, duration_days = ?, lock_period_days = ?, min_amount = ?, max_amount = ?, status = ? WHERE id = ?");
+            $upd->execute([$name, $description, $returnRate, $durationDays, $durationDays, $minAmount, $maxAmount, $status, $planId]);
+            echo json_encode(['success' => true, 'message' => 'Investment plan updated successfully.']);
+        } catch (\Exception $e) {
+            http_response_code(500);
+            echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+        }
+        exit;
+    }
+
+    if ($_SERVER['REQUEST_METHOD'] === 'DELETE' && isset($segments[2]) && is_numeric($segments[2])) {
+        $planId = intval($segments[2]);
+        try {
+            $pdo->prepare("DELETE FROM investment_plans WHERE id = ?")->execute([$planId]);
+            echo json_encode(['success' => true, 'message' => 'Investment plan deleted successfully.']);
+        } catch (\Exception $e) {
+            http_response_code(500);
+            echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+        }
+        exit;
+    }
+
+    try {
+        $stmt = $pdo->query("SELECT * FROM investment_plans ORDER BY id ASC");
+        echo json_encode(['success' => true, 'data' => $stmt->fetchAll()]);
+    } catch (\Exception $e) {
+        echo json_encode(['success' => true, 'data' => []]);
+    }
+    exit;
+}
+
+// ------------------------------------------------------------------------------
+// ROUTE: /api/admin/deposits (List & Approve / Credit User Balance)
+// ------------------------------------------------------------------------------
+if ($section === 'admin' && $action === 'deposits') {
+    if (isset($segments[2]) && is_numeric($segments[2]) && ($segments[3] ?? '') === 'approve') {
+        $depositId = intval($segments[2]);
+        try {
+            $dStmt = $pdo->prepare("SELECT * FROM deposits WHERE id = ? LIMIT 1");
+            $dStmt->execute([$depositId]);
+            $deposit = $dStmt->fetch();
+
+            if (!$deposit) {
+                http_response_code(404);
+                echo json_encode(['success' => false, 'message' => 'Deposit record not found.']);
+                exit;
+            }
+
+            if ($deposit['status'] === 'COMPLETED' || $deposit['status'] === 'APPROVED') {
+                echo json_encode(['success' => true, 'message' => 'Deposit already approved.']);
+                exit;
+            }
+
+            $userId = intval($deposit['user_id']);
+            $amount = floatval($deposit['amount']);
+
+            $pdo->prepare("UPDATE deposits SET status = 'COMPLETED', updated_at = NOW() WHERE id = ?")->execute([$depositId]);
+
+            $wStmt = $pdo->prepare("SELECT id, available_balance FROM wallets WHERE user_id = ? AND currency = 'USD' LIMIT 1");
+            $wStmt->execute([$userId]);
+            $wallet = $wStmt->fetch();
+
+            $currentBal = $wallet ? floatval($wallet['available_balance']) : 0.00;
+            $newBal = $currentBal + $amount;
+
+            if ($wallet) {
+                $pdo->prepare("UPDATE wallets SET available_balance = ? WHERE id = ?")->execute([$newBal, $wallet['id']]);
+                $walletId = $wallet['id'];
+            } else {
+                $pdo->prepare("INSERT INTO wallets (user_id, currency, available_balance) VALUES (?, 'USD', ?)")->execute([$userId, $newBal]);
+                $walletId = $pdo->lastInsertId();
+            }
+
+            try {
+                $pdo->prepare("INSERT INTO wallet_ledgers (wallet_id, entry_type, amount, balance_after, description) VALUES (?, 'CREDIT', ?, ?, ?)")
+                    ->execute([$walletId, $amount, $newBal, 'Deposit approved #' . $depositId]);
+            } catch (\Exception $e) {}
+
+            echo json_encode([
+                'success' => true,
+                'message' => "Deposit of $" . number_format($amount, 2) . " approved and credited to user wallet successfully.",
+                'data' => ['deposit_id' => $depositId, 'user_id' => $userId, 'new_balance' => $newBal]
+            ]);
+        } catch (\Exception $e) {
+            http_response_code(500);
+            echo json_encode(['success' => false, 'message' => 'Error approving deposit: ' . $e->getMessage()]);
+        }
+        exit;
+    }
+
+    try {
+        $stmt = $pdo->query("SELECT d.*, u.name as user_name, u.email as user_email FROM deposits d LEFT JOIN users u ON d.user_id = u.id ORDER BY d.id DESC");
+        echo json_encode(['success' => true, 'data' => $stmt ? $stmt->fetchAll() : []]);
+    } catch (\Exception $e) {
+        echo json_encode(['success' => true, 'data' => []]);
+    }
+    exit;
+}
+
+// ------------------------------------------------------------------------------
 // ROUTE: /api/admin/users (Directory, Adjust Balance, Balance History, User Actions)
 // ------------------------------------------------------------------------------
 if ($section === 'admin' && $action === 'users') {
@@ -1450,16 +1620,19 @@ if ($section === 'admin' && $action === 'users') {
         }
 
         try {
+            $pdo->beginTransaction();
+
             $uStmt = $pdo->prepare("SELECT id, name, email FROM users WHERE id = ? LIMIT 1");
             $uStmt->execute([$targetUserId]);
             $targetUser = $uStmt->fetch();
             if (!$targetUser) {
+                if ($pdo->inTransaction()) $pdo->rollBack();
                 http_response_code(404);
                 echo json_encode(['success' => false, 'message' => 'Target user not found.']);
                 exit;
             }
 
-            $wStmt = $pdo->prepare("SELECT id, available_balance FROM wallets WHERE user_id = ? AND currency = 'USD' LIMIT 1");
+            $wStmt = $pdo->prepare("SELECT id, available_balance FROM wallets WHERE user_id = ? AND currency = 'USD' FOR UPDATE");
             $wStmt->execute([$targetUserId]);
             $wallet = $wStmt->fetch();
 
@@ -1473,15 +1646,17 @@ if ($section === 'admin' && $action === 'users') {
             if ($wallet) {
                 $upd = $pdo->prepare("UPDATE wallets SET available_balance = ? WHERE id = ?");
                 $upd->execute([$newBal, $wallet['id']]);
+                $walletId = $wallet['id'];
             } else {
                 $ins = $pdo->prepare("INSERT INTO wallets (user_id, currency, available_balance) VALUES (?, 'USD', ?)");
                 $ins->execute([$targetUserId, $newBal]);
+                $walletId = $pdo->lastInsertId();
             }
 
-            try {
-                $pdo->prepare("INSERT INTO wallet_ledgers (wallet_id, entry_type, amount, balance_after, description) VALUES (?, ?, ?, ?, ?)")
-                    ->execute([$wallet['id'] ?? $pdo->lastInsertId(), $type === 'ADD' ? 'CREDIT' : 'DEBIT', $amount, $newBal, $reason]);
-            } catch (\Exception $e) {}
+            $pdo->prepare("INSERT INTO wallet_ledgers (wallet_id, user_id, transaction_type, entry_type, amount, balance_before, balance_after, description) VALUES (?, ?, 'ADMIN_ADJUSTMENT', ?, ?, ?, ?, ?)")
+                ->execute([$walletId, $targetUserId, $type === 'ADD' ? 'CREDIT' : 'DEBIT', $amount, $currentBal, $newBal, $reason]);
+
+            $pdo->commit();
 
             echo json_encode([
                 'success' => true,
@@ -1494,6 +1669,7 @@ if ($section === 'admin' && $action === 'users') {
                 ]
             ]);
         } catch (\Exception $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
             http_response_code(500);
             echo json_encode(['success' => false, 'message' => 'Database error: ' . $e->getMessage()]);
         }

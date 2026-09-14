@@ -959,111 +959,509 @@ export const MyInvestmentsView: React.FC = () => {
 };
 
 // ----------------------------------------------------------------------
-// 7. Staking User View
+// 7. Staking User View (Live Dynamic Validator Pools & Ledger Stakes)
 // ----------------------------------------------------------------------
 export const StakingUserView: React.FC = () => {
-  const [stakeModal, setStakeModal] = useState<string | null>(null);
-  const [stakeAmount, setStakeAmount] = useState<string>('1.0');
-  const [stakeSuccess, setStakeSuccess] = useState<string | null>(null);
+  const [pools, setPools] = useState<any[]>([]);
+  const [userStakes, setUserStakes] = useState<any[]>([]);
+  const [availableUsd, setAvailableUsd] = useState<string>('0.00');
+  const [loading, setLoading] = useState<boolean>(true);
+  const [submitting, setSubmitting] = useState<boolean>(false);
+  const [selectedPool, setSelectedPool] = useState<any | null>(null);
+  const [stakeAmount, setStakeAmount] = useState<string>('50');
+  const [autoCompound, setAutoCompound] = useState<boolean>(true);
+  const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  const handleCommitStake = () => {
-    setStakeSuccess(`Successfully committed ${stakeAmount} ${stakeModal} to validator staking node!`);
-    setStakeModal(null);
+  const getToken = () =>
+    localStorage.getItem('apex_session_token') ||
+    localStorage.getItem('token') ||
+    localStorage.getItem('apex_token') ||
+    '';
+
+  const fetchData = async () => {
+    try {
+      setLoading(true);
+      const token = getToken();
+      const headers = token ? { Authorization: `Bearer ${token}` } : {};
+
+      const [poolsRes, stakesRes, walletRes] = await Promise.all([
+        fetch('/api/staking-pools'),
+        token ? fetch('/api/stakes', { headers }) : Promise.resolve(null),
+        token ? fetch('/api/wallet', { headers }) : Promise.resolve(null)
+      ]);
+
+      const poolsData = await poolsRes.json();
+      if (poolsData.success && Array.isArray(poolsData.data)) {
+        setPools(poolsData.data);
+      }
+
+      if (stakesRes) {
+        const stakesData = await stakesRes.json();
+        if (stakesData.success && Array.isArray(stakesData.data)) {
+          setUserStakes(stakesData.data);
+        }
+      }
+
+      if (walletRes) {
+        const walletData = await walletRes.json();
+        if (walletData.success && walletData.data?.wallet?.balances?.available) {
+          setAvailableUsd(walletData.data.wallet.balances.available);
+        }
+      }
+    } catch (err: any) {
+      console.error('Failed to load staking data:', err);
+    } finally {
+      setLoading(false);
+    }
   };
+
+  useEffect(() => {
+    fetchData();
+
+    const handleBalanceChange = () => fetchData();
+    window.addEventListener('balance_updated', handleBalanceChange);
+    return () => window.removeEventListener('balance_updated', handleBalanceChange);
+  }, []);
+
+  const openStakeModal = (pool: any) => {
+    const minVal = pool.active_version?.minimum_stake ? parseFloat(pool.active_version.minimum_stake) : 10;
+    setSelectedPool(pool);
+    setStakeAmount(String(minVal));
+    setStatusMessage(null);
+  };
+
+  const handleCommitStake = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedPool) return;
+
+    const token = getToken();
+    if (!token) {
+      setStatusMessage({ type: 'error', text: 'Please sign in to delegate stake.' });
+      return;
+    }
+
+    const amtNum = parseFloat(stakeAmount);
+    const minNum = parseFloat(selectedPool.active_version?.minimum_stake || '10');
+    const maxNum = parseFloat(selectedPool.active_version?.maximum_stake || '100000');
+    const userBalNum = parseFloat(availableUsd);
+
+    if (isNaN(amtNum) || amtNum <= 0) {
+      setStatusMessage({ type: 'error', text: 'Please enter a valid stake amount.' });
+      return;
+    }
+
+    if (amtNum < minNum) {
+      setStatusMessage({ type: 'error', text: `Minimum stake for this pool is $${minNum.toFixed(2)} USD.` });
+      return;
+    }
+
+    if (amtNum > maxNum) {
+      setStatusMessage({ type: 'error', text: `Maximum stake for this pool is $${maxNum.toFixed(2)} USD.` });
+      return;
+    }
+
+    if (amtNum > userBalNum) {
+      setStatusMessage({
+        type: 'error',
+        text: `Insufficient wallet balance. Available: $${userBalNum.toFixed(2)} USD. Please deposit funds first.`
+      });
+      return;
+    }
+
+    try {
+      setSubmitting(true);
+      setStatusMessage(null);
+
+      const res = await fetch('/api/stakes', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          pool_id: selectedPool.id,
+          amount: amtNum.toFixed(2),
+          currency: 'USD',
+          auto_compound: autoCompound
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.message || 'Failed to delegate stake');
+      }
+
+      setStatusMessage({
+        type: 'success',
+        text: `Successfully delegated $${amtNum.toFixed(2)} USD to ${selectedPool.name}! Principal is securely locked in validator pool.`
+      });
+
+      setSelectedPool(null);
+      window.dispatchEvent(new Event('balance_updated'));
+      await fetchData();
+    } catch (err: any) {
+      setStatusMessage({ type: 'error', text: err?.message || 'Error executing stake delegation.' });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleClaimReward = async (stakeId: number) => {
+    try {
+      const token = getToken();
+      const res = await fetch(`/api/stakes/${stakeId}/claim`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.message || 'Failed to claim reward');
+
+      setStatusMessage({ type: 'success', text: data.message || 'Staking reward credited to your available balance!' });
+      window.dispatchEvent(new Event('balance_updated'));
+      await fetchData();
+    } catch (err: any) {
+      setStatusMessage({ type: 'error', text: err?.message || 'Error claiming reward.' });
+    }
+  };
+
+  const handleUnstake = async (stakeId: number, poolName: string) => {
+    if (!window.confirm(`Are you sure you want to unstake from "${poolName}"? Principal will be returned to your available wallet.`)) return;
+    try {
+      const token = getToken();
+      const res = await fetch(`/api/stakes/${stakeId}/unstake`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.message || 'Failed to unstake');
+
+      setStatusMessage({ type: 'success', text: data.message || `Successfully unstaked from ${poolName}. Principal credited to wallet.` });
+      window.dispatchEvent(new Event('balance_updated'));
+      await fetchData();
+    } catch (err: any) {
+      setStatusMessage({ type: 'error', text: err?.message || 'Error unstaking funds.' });
+    }
+  };
+
+  const activePools = pools.filter(p => p.status === 'ACTIVE' || !p.status);
 
   return (
     <div className="space-y-6 text-left">
-      <div>
-        <h2 className="text-xl font-bold text-slate-900 dark:text-white">Proof of Stake Pools</h2>
-        <p className="text-xs text-slate-500">Institutional validator node delegations and annualized yield rewards</p>
+      {/* Header & Balance Banner */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-900/60 p-5 rounded-2xl border border-slate-800">
+        <div>
+          <h2 className="text-xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
+            <Coins className="w-5 h-5 text-indigo-400" />
+            Proof of Stake & Yield Pools
+          </h2>
+          <p className="text-xs text-slate-400 mt-1">
+            Delegate USD to institutional validator nodes for guaranteed daily yield distributions.
+          </p>
+        </div>
+        <div className="flex items-center gap-4 bg-slate-950/80 px-4 py-2.5 rounded-xl border border-slate-800/80">
+          <div>
+            <span className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold block">
+              Available USD Wallet
+            </span>
+            <span className="text-base font-bold font-mono text-emerald-400">
+              ${parseFloat(availableUsd || '0').toFixed(2)} USD
+            </span>
+          </div>
+          <Button variant="outline" size="sm" onClick={fetchData} isLoading={loading}>
+            <RefreshCw className="w-3.5 h-3.5 mr-1" /> Refresh
+          </Button>
+        </div>
       </div>
 
-      {stakeSuccess && (
-        <Alert type="success" title="Stake Activated">
-          {stakeSuccess}
+      {statusMessage && (
+        <Alert
+          type={statusMessage.type === 'success' ? 'success' : 'error'}
+          title={statusMessage.type === 'success' ? 'Staking Update' : 'Staking Notice'}
+        >
+          {statusMessage.text}
         </Alert>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <Card className="p-5 flex flex-col justify-between">
-          <div>
-            <div className="flex justify-between items-center mb-2">
-              <span className="font-bold text-lg text-slate-900 dark:text-white">ETH</span>
-              <Badge variant="success">Active Node</Badge>
-            </div>
-            <h4 className="font-bold text-sm text-slate-800 dark:text-slate-200">Ethereum Validator Reserve</h4>
-            <p className="text-xs text-slate-500 mt-1 mb-4">60 Days Lockup • 4.2% Estimated APR</p>
-            <div className="text-xs space-y-1 border-t border-slate-100 dark:border-slate-800 pt-3">
-              <div className="flex justify-between"><span>Validator Status:</span><span className="font-bold text-emerald-600">Online (0% Slashing)</span></div>
-              <div className="flex justify-between"><span>Est. Rewards Rate:</span><span className="text-emerald-600 font-bold">+0.018 ETH/mo</span></div>
-            </div>
-          </div>
-          <Button variant="primary" size="sm" className="mt-5 w-full" onClick={() => { setStakeAmount('1.0'); setStakeModal('ETH'); }}>
-            Delegate Stake
-          </Button>
-        </Card>
+      {/* Available Pools Grid */}
+      <div>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-bold uppercase tracking-wider text-slate-300">
+            Active Validator Pools ({activePools.length})
+          </h3>
+          <span className="text-xs text-slate-400">Real-Time Daily Yield</span>
+        </div>
 
-        <Card className="p-5 flex flex-col justify-between">
-          <div>
-            <div className="flex justify-between items-center mb-2">
-              <span className="font-bold text-lg text-slate-900 dark:text-white">SOL</span>
-              <Badge variant="success">Active Node</Badge>
-            </div>
-            <h4 className="font-bold text-sm text-slate-800 dark:text-slate-200">Solana High-Throughput Node</h4>
-            <p className="text-xs text-slate-500 mt-1 mb-4">30 Days Lockup • 6.8% Estimated APR</p>
-            <div className="text-xs space-y-1 border-t border-slate-100 dark:border-slate-800 pt-3">
-              <div className="flex justify-between"><span>Validator Status:</span><span className="font-bold text-emerald-600">Online (0% Slashing)</span></div>
-              <div className="flex justify-between"><span>Est. Rewards Rate:</span><span className="text-emerald-600 font-bold">+0.56 SOL/mo</span></div>
-            </div>
+        {loading && pools.length === 0 ? (
+          <div className="p-8 text-center text-slate-400 text-xs bg-slate-900/40 rounded-xl border border-slate-800">
+            <RefreshCw className="w-5 h-5 animate-spin mx-auto mb-2 text-indigo-400" />
+            Loading active validator staking pools...
           </div>
-          <Button variant="primary" size="sm" className="mt-5 w-full" onClick={() => { setStakeAmount('5.0'); setStakeModal('SOL'); }}>
-            Delegate Stake
-          </Button>
-        </Card>
+        ) : activePools.length === 0 ? (
+          <div className="p-8 text-center text-slate-400 text-xs bg-slate-900/40 rounded-xl border border-slate-800">
+            No active staking pools currently available. Please check back shortly.
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+            {activePools.map((pool) => {
+              const version = pool.active_version || {};
+              const apr = version.reward_rate || pool.reward_rate || '12.00';
+              const lockDays = version.lock_period_days || pool.lock_period_days || 30;
+              const minStake = version.minimum_stake || pool.min_stake || '10.00';
+              const maxStake = version.maximum_stake || pool.max_stake || '50000.00';
+              const monthlyEstRate = (parseFloat(apr) / 12).toFixed(2);
 
-        <Card className="p-5 flex flex-col justify-between">
-          <div>
-            <div className="flex justify-between items-center mb-2">
-              <span className="font-bold text-lg text-slate-900 dark:text-white">USDC</span>
-              <Badge variant="success">Active Node</Badge>
-            </div>
-            <h4 className="font-bold text-sm text-slate-800 dark:text-slate-200">USD Liquidity Reserve</h4>
-            <p className="text-xs text-slate-500 mt-1 mb-4">90 Days Lockup • 5.2% Estimated APR</p>
-            <div className="text-xs space-y-1 border-t border-slate-100 dark:border-slate-800 pt-3">
-              <div className="flex justify-between"><span>Validator Status:</span><span className="font-bold text-emerald-600">Online</span></div>
-              <div className="flex justify-between"><span>Est. Rewards Rate:</span><span className="text-emerald-600 font-bold">+5.20 USDC/mo</span></div>
-            </div>
+              return (
+                <Card key={pool.id} className="p-5 flex flex-col justify-between hover:border-indigo-500/50 transition duration-200">
+                  <div>
+                    <div className="flex justify-between items-center mb-2">
+                      <span className="font-bold text-base text-slate-900 dark:text-white flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                        {pool.asset || 'USD'}
+                      </span>
+                      <Badge variant="success">Active Pool</Badge>
+                    </div>
+
+                    <h4 className="font-bold text-sm text-slate-800 dark:text-slate-100">
+                      {pool.name}
+                    </h4>
+                    <p className="text-xs text-slate-400 mt-1 line-clamp-2">
+                      {pool.description || `${lockDays} Days Lockup • ${apr}% Annualized Yield`}
+                    </p>
+
+                    <div className="mt-4 p-3 bg-slate-950/60 rounded-xl border border-slate-800/80 space-y-2 text-xs">
+                      <div className="flex justify-between items-center">
+                        <span className="text-slate-400">Annual Return (APR):</span>
+                        <span className="font-bold text-emerald-400 text-sm font-mono">+{apr}%</span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-slate-400">Lockup Duration:</span>
+                        <span className="font-semibold text-slate-200">{lockDays} Days</span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-slate-400">Stake Limits:</span>
+                        <span className="font-mono text-slate-300">${parseFloat(minStake).toFixed(0)} - ${parseFloat(maxStake).toFixed(0)} USD</span>
+                      </div>
+                      <div className="flex justify-between items-center pt-1 border-t border-slate-800/60">
+                        <span className="text-slate-400">Est. Monthly Rate:</span>
+                        <span className="text-indigo-400 font-bold font-mono">~{monthlyEstRate}% / month</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    className="mt-5 w-full font-semibold bg-indigo-600 hover:bg-indigo-500 text-white"
+                    onClick={() => openStakeModal(pool)}
+                  >
+                    Delegate Stake (USD)
+                  </Button>
+                </Card>
+              );
+            })}
           </div>
-          <Button variant="primary" size="sm" className="mt-5 w-full" onClick={() => { setStakeAmount('500'); setStakeModal('USDC'); }}>
-            Delegate Stake
-          </Button>
-        </Card>
+        )}
       </div>
 
-      {stakeModal && (
+      {/* Active Delegated Stakes & Unstake Section */}
+      <div className="mt-8 space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="text-lg font-bold text-slate-900 dark:text-white">
+            Your Active Delegated Stakes & Unstake Management
+          </h3>
+          <span className="text-xs text-slate-400">{userStakes.length} Active Delegations</span>
+        </div>
+
+        {userStakes.length === 0 ? (
+          <Card className="p-8 text-center text-slate-400 text-xs border border-dashed border-slate-800">
+            <Coins className="w-8 h-8 text-slate-600 mx-auto mb-2" />
+            <p className="font-semibold text-slate-300">No active staking delegations yet.</p>
+            <p className="text-[11px] text-slate-500 mt-0.5">Select an active validator pool above to delegate USD and earn daily rewards.</p>
+          </Card>
+        ) : (
+          <div className="space-y-3">
+            {userStakes.map((stake) => {
+              const stakedAmt = parseFloat(stake.amount || '0').toFixed(2);
+              const accrued = parseFloat(stake.accrued_reward || stake.total_reward_claimed || '0').toFixed(4);
+              const apr = stake.reward_rate ? `${stake.reward_rate}%` : '12.0%';
+              const lockUntil = stake.lock_until ? new Date(stake.lock_until).toLocaleDateString() : 'Active';
+
+              return (
+                <Card key={stake.id} className="p-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-sm text-slate-900 dark:text-white">
+                        {stake.pool_name || `Staking Pool #${stake.pool_id}`}
+                      </span>
+                      <Badge variant={stake.status === 'ACTIVE' ? 'success' : 'neutral'} size="sm">
+                        {stake.status}
+                      </Badge>
+                      {stake.auto_compound && (
+                        <span className="text-[10px] bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 px-2 py-0.5 rounded-full font-medium">
+                          Auto-Compounding
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-xs text-slate-500 dark:text-slate-400 flex flex-wrap items-center gap-x-4 gap-y-1">
+                      <span>Principal: <strong className="text-emerald-400 font-mono">${stakedAmt} USD</strong></span>
+                      <span>APR: <strong className="text-indigo-400 font-mono">{apr}</strong></span>
+                      <span>Accrued Yield: <strong className="text-amber-400 font-mono">+${accrued} USD</strong></span>
+                      <span>Lock Ends: <strong className="text-slate-300">{lockUntil}</strong></span>
+                      <span className="font-mono text-[10px] text-slate-500">Ref: {stake.public_reference || `#${stake.id}`}</span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 w-full md:w-auto">
+                    {parseFloat(accrued) > 0 && (
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        className="bg-emerald-600 hover:bg-emerald-500 text-xs"
+                        onClick={() => handleClaimReward(stake.id)}
+                      >
+                        Claim +${accrued}
+                      </Button>
+                    )}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="text-rose-400 hover:text-white hover:bg-rose-600 border-rose-500/30 hover:border-rose-600 text-xs"
+                      onClick={() => handleUnstake(stake.id, stake.pool_name || 'Validator Pool')}
+                    >
+                      Unstake / Withdraw
+                    </Button>
+                  </div>
+                </Card>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Stake Delegation Modal */}
+      {selectedPool && (
         <Modal
-          isOpen={!!stakeModal}
-          onClose={() => setStakeModal(null)}
-          title={`Stake Delegation: ${stakeModal}`}
-          description="Lockup Duration & Validator Node Assignment"
+          isOpen={!!selectedPool}
+          onClose={() => setSelectedPool(null)}
+          title={`Delegate Stake: ${selectedPool.name}`}
+          description="Institutional Proof-of-Stake Delegation"
         >
-          <div className="space-y-4 text-xs text-left">
-            <p className="text-slate-600 dark:text-slate-400">
-              Delegating tokens to this validator node accrues daily staking yield according to protocol consensus rules.
-            </p>
-            <Input
-              label={`Amount of ${stakeModal} to delegate`}
-              value={stakeAmount}
-              onChange={(e) => setStakeAmount(e.target.value)}
-              required
-            />
-            <div className="flex justify-end gap-2 pt-2">
-              <Button variant="outline" size="sm" onClick={() => setStakeModal(null)}>Cancel</Button>
-              <Button variant="primary" size="sm" onClick={handleCommitStake}>
-                Commit Stake
+          <form onSubmit={handleCommitStake} className="space-y-4 text-xs text-left">
+            <div className="p-3 bg-slate-900 rounded-xl border border-slate-800 space-y-2">
+              <div className="flex justify-between items-center text-slate-300">
+                <span>Annual Percentage Rate (APR):</span>
+                <span className="font-bold text-emerald-400 text-sm font-mono">
+                  +{selectedPool.active_version?.reward_rate || selectedPool.reward_rate || '12.00'}%
+                </span>
+              </div>
+              <div className="flex justify-between items-center text-slate-300">
+                <span>Lockup Period:</span>
+                <span className="font-semibold text-white">
+                  {selectedPool.active_version?.lock_period_days || selectedPool.lock_period_days || 30} Days
+                </span>
+              </div>
+              <div className="flex justify-between items-center text-slate-300">
+                <span>Available Balance:</span>
+                <span className="font-bold font-mono text-indigo-400">
+                  ${parseFloat(availableUsd || '0').toFixed(2)} USD
+                </span>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-300 mb-1">
+                Amount to Stake ($ USD)
+              </label>
+              <div className="relative">
+                <Input
+                  type="number"
+                  step="0.01"
+                  min={selectedPool.active_version?.minimum_stake || '10'}
+                  max={selectedPool.active_version?.maximum_stake || '100000'}
+                  value={stakeAmount}
+                  onChange={(e) => setStakeAmount(e.target.value)}
+                  placeholder="50.00"
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={() => setStakeAmount(availableUsd)}
+                  className="absolute right-2.5 top-2 text-[10px] font-bold bg-indigo-500/20 text-indigo-300 hover:bg-indigo-500/30 px-2 py-1 rounded"
+                >
+                  MAX
+                </button>
+              </div>
+              <div className="flex justify-between text-[10px] text-slate-500 mt-1">
+                <span>Min: ${parseFloat(selectedPool.active_version?.minimum_stake || '10').toFixed(2)} USD</span>
+                <span>Max: ${parseFloat(selectedPool.active_version?.maximum_stake || '100000').toFixed(2)} USD</span>
+              </div>
+            </div>
+
+            {/* Quick Stake Selectors */}
+            <div className="grid grid-cols-4 gap-1.5">
+              {[50, 100, 250, 500].map((val) => (
+                <button
+                  key={val}
+                  type="button"
+                  onClick={() => setStakeAmount(String(val))}
+                  className="py-1 px-2 rounded-lg bg-slate-900 border border-slate-800 text-slate-300 hover:border-indigo-500 text-center text-xs font-mono"
+                >
+                  ${val}
+                </button>
+              ))}
+            </div>
+
+            {/* Live Return Projection */}
+            {parseFloat(stakeAmount) > 0 && (
+              <div className="p-3 bg-emerald-500/10 rounded-xl border border-emerald-500/20 space-y-1.5">
+                <div className="flex justify-between text-slate-300">
+                  <span>Daily Estimated Return:</span>
+                  <span className="font-mono font-bold text-emerald-400">
+                    +${(
+                      (parseFloat(stakeAmount) *
+                        (parseFloat(selectedPool.active_version?.reward_rate || '12.0') / 100)) /
+                      365
+                    ).toFixed(4)}{' '}
+                    USD
+                  </span>
+                </div>
+                <div className="flex justify-between text-slate-300">
+                  <span>Maturity Yield ({selectedPool.active_version?.lock_period_days || 30} days):</span>
+                  <span className="font-mono font-bold text-emerald-400">
+                    +${(
+                      ((parseFloat(stakeAmount) *
+                        (parseFloat(selectedPool.active_version?.reward_rate || '12.0') / 100)) /
+                        365) *
+                      (selectedPool.active_version?.lock_period_days || 30)
+                    ).toFixed(2)}{' '}
+                    USD
+                  </span>
+                </div>
+              </div>
+            )}
+
+            <div className="flex items-center gap-2 pt-1">
+              <input
+                type="checkbox"
+                id="auto-compound-cb"
+                checked={autoCompound}
+                onChange={(e) => setAutoCompound(e.target.checked)}
+                className="rounded border-slate-700 text-indigo-600 focus:ring-indigo-500"
+              />
+              <label htmlFor="auto-compound-cb" className="text-xs text-slate-300 cursor-pointer">
+                Auto-Compound Yield (reinvest daily rewards automatically)
+              </label>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-3 border-t border-slate-800">
+              <Button type="button" variant="outline" size="sm" onClick={() => setSelectedPool(null)}>
+                Cancel
+              </Button>
+              <Button type="submit" variant="primary" size="sm" isLoading={submitting} className="bg-indigo-600 hover:bg-indigo-500 text-white font-semibold">
+                Confirm & Lock Stake
               </Button>
             </div>
-          </div>
+          </form>
         </Modal>
       )}
     </div>
