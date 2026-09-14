@@ -33,7 +33,75 @@ import { AmzLogo } from '../../components/common/AmzLogo.js';
 // Developer Simulated Email Drawer / Modal
 // ----------------------------------------------------------------------
 export const SimulatedInboxViewer: React.FC = () => {
-  return null;
+  const [emails, setEmails] = useState<any[]>([]);
+  const [isOpen, setIsOpen] = useState(true);
+  const [copiedCode, setCopiedCode] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fetchEmails = async () => {
+      try {
+        const res = await fetch('/api/auth/simulated-emails');
+        const data = await res.json();
+        if (data.success && Array.isArray(data.data)) {
+          setEmails(data.data);
+        }
+      } catch (err) {
+        // ignore
+      }
+    };
+    fetchEmails();
+    const interval = setInterval(fetchEmails, 3000);
+    return () => clearInterval(interval);
+  }, []);
+
+  if (emails.length === 0) return null;
+
+  return (
+    <div className="my-3 p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl text-xs text-amber-200">
+      <div className="flex items-center justify-between mb-1">
+        <span className="font-bold flex items-center gap-1.5">
+          <Inbox className="w-3.5 h-3.5 text-amber-400" />
+          <span>Simulated Mailbox (Instant OTP)</span>
+        </span>
+        <button
+          type="button"
+          onClick={() => setIsOpen(!isOpen)}
+          className="text-xs text-amber-300 underline hover:text-white cursor-pointer"
+        >
+          {isOpen ? 'Hide' : `View (${emails.length})`}
+        </button>
+      </div>
+      {isOpen && (
+        <div className="mt-2 space-y-2 max-h-40 overflow-y-auto pr-1">
+          {emails.slice(0, 3).map((e, idx) => (
+            <div key={idx} className="p-2 bg-slate-950/80 rounded-lg border border-amber-500/20 text-[11px] space-y-1">
+              <div className="flex justify-between text-slate-400">
+                <span className="truncate max-w-[160px] font-medium">{e.to}</span>
+                <span>{new Date(e.dispatchedAt).toLocaleTimeString()}</span>
+              </div>
+              <div className="font-semibold text-white truncate">{e.subject}</div>
+              {e.code && (
+                <div className="flex items-center justify-between bg-amber-500/20 px-2 py-1 rounded font-mono text-amber-300 font-bold">
+                  <span>OTP: {e.code}</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText(e.code);
+                      setCopiedCode(e.code);
+                      setTimeout(() => setCopiedCode(null), 2000);
+                    }}
+                    className="text-[10px] bg-amber-500 text-slate-950 px-1.5 py-0.5 rounded font-sans font-bold hover:bg-amber-400 cursor-pointer"
+                  >
+                    {copiedCode === e.code ? 'Copied!' : 'Copy Code'}
+                  </button>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 };
 
 // ----------------------------------------------------------------------
