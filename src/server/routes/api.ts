@@ -393,9 +393,22 @@ router.post('/auth/login', loginRateLimiter, async (req: Request, res: Response)
       severity: 'MEDIUM'
     });
 
-    return res.status(403).json(
-      createErrorResponse('Email verification required. Please verify your OTP first. We have sent a new 6-digit confirmation code to your email inbox.', ['email_verification_required'], 403)
-    );
+    return res.status(403).json({
+      success: false,
+      status: 'pending_verification',
+      requiresEmailVerification: true,
+      email: user.email,
+      previewCode: code,
+      preview_verification_code: code,
+      message: `Your account is not verified yet. We have sent a fresh 6-digit verification code to your email (${user.email}). Please enter it to complete sign-in.`,
+      error: `Your account is not verified yet. We have sent a fresh 6-digit verification code to your email (${user.email}). Please enter it to complete sign-in.`,
+      data: {
+        requiresEmailVerification: true,
+        email: user.email,
+        previewCode: code,
+        preview_verification_code: code
+      }
+    });
   }
 
   // 5. Two-Factor Authentication Challenge

@@ -66,12 +66,11 @@ class EmailService {
         });
       }
       this.isConfigured = true;
-      logger.info('EMAIL', `SMTP Transporter initialized for ${smtpUser}`);
+      logger.info('EMAIL', `SMTP Transporter initialized for ${smtpUser} via ${smtpHost || 'smtp.hostinger.com'}:${smtpPort}`);
       // Verify transporter connectivity non-blockingly
-      this.transporter.verify((error) => {
+      this.transporter.verify((error: any) => {
         if (error) {
-          logger.warn('EMAIL', `SMTP connection check failed (falling back to simulated delivery): ${error.message}`);
-          this.isConfigured = false;
+          logger.warn('EMAIL', `SMTP connection check warning: ${error.message}`);
         } else {
           logger.info('EMAIL', 'SMTP server connection verified successfully.');
         }
@@ -307,22 +306,24 @@ class EmailService {
     this.recordEmail(emailRecord);
 
     if (this.isConfigured && this.transporter) {
-      // Non-blocking SMTP send attempt in background
-      this.transporter.sendMail({
-        from: this.getSender(),
-        to,
-        subject: `[AMZDistributor] Your Verification Code: ${code}`,
-        text: `Welcome ${username}!\n\nYour 6-digit email confirmation code is: ${code}\n\nOr click here to verify: ${link}\n\nThis code expires in 15 minutes.`,
-        html
-      }).then((info) => {
+      try {
+        const info = await this.transporter.sendMail({
+          from: this.getSender(),
+          to,
+          subject: `[AMZDistributor] Your Verification Code: ${code}`,
+          text: `Welcome ${username}!\n\nYour 6-digit email confirmation code is: ${code}\n\nOr click here to verify: ${link}\n\nThis code expires in 15 minutes.`,
+          html
+        });
         emailRecord.deliveryStatus = 'SENT';
         logger.info('EMAIL', `[LIVE EMAIL DELIVERED] To: ${to} | MessageId: ${info.messageId}`);
-      }).catch((err: any) => {
+        return { success: true };
+      } catch (err: any) {
         const errMsg = err?.message || String(err);
         emailRecord.deliveryStatus = 'FAILED';
         emailRecord.deliveryError = errMsg;
-        logger.warn('EMAIL', `SMTP send failed (simulated successfully): ${errMsg}`);
-      });
+        logger.warn('EMAIL', `SMTP send error: ${errMsg}`);
+        return { success: false, error: errMsg };
+      }
     } else {
       logger.warn('EMAIL', `[SMTP NOT CONFIGURED] Simulated code ${code} for ${to}.`);
     }

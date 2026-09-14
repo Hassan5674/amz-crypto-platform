@@ -1,6 +1,6 @@
 <?php
 /**
- * hostinger_upload/api/auth/verify_otp.php
+ * api/auth/verify_otp.php
  * Production-ready OTP verification and legitimate email dispatch service using PHPMailer.
  * Pulls SMTP credentials (SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS) from environmental variables,
  * sends legitimate verification emails to the recipient, and returns a consistent

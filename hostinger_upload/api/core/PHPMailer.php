@@ -1,6 +1,6 @@
 <?php
 /**
- * hostinger_upload/api/core/PHPMailer.php
+ * api/core/PHPMailer.php
  * Standalone, zero-dependency PHPMailer implementation tailored for Hostinger Shared Hosting.
  * Supports:
  * - Direct SMTP over SSL (Port 465)
@@ -106,8 +106,8 @@ class PHPMailer {
     }
 
     /**
-     * Dispatches the email. Tries authenticated SMTP socket first;
-     * falls back to PHP mail() with Hostinger envelope sender if socket blocked.
+     * Dispatches the email. Tries authenticated SMTP Socket across multiple secure ports/hosts,
+     * then falls back to PHP mail() with Hostinger envelope sender if socket blocked.
      */
     public function send(): bool {
         if (empty($this->to)) {
@@ -118,16 +118,26 @@ class PHPMailer {
 
         $recipient = $this->to[0]['address'];
 
-        // Attempt 1: Direct authenticated SMTP Socket
-        $smtpResult = $this->sendViaSmtpSocket($recipient);
-        if ($smtpResult) {
-            error_log("[PHPMailer SUCCESS] Email delivered via direct SMTP ({$this->Host}:{$this->Port}) to {$recipient}");
-            return true;
+        // Endpoints to attempt in order
+        $attempts = [
+            ['host' => $this->Host, 'port' => $this->Port, 'secure' => ($this->Port === 465 ? 'ssl' : 'tls')],
+            ['host' => $this->Host, 'port' => ($this->Port === 465 ? 587 : 465), 'secure' => ($this->Port === 465 ? 'tls' : 'ssl')],
+            ['host' => 'mail.amzdistributor.com', 'port' => 465, 'secure' => 'ssl'],
+            ['host' => 'mail.amzdistributor.com', 'port' => 587, 'secure' => 'tls'],
+        ];
+
+        foreach ($attempts as $idx => $attempt) {
+            $smtpResult = $this->sendViaSmtpSocket($recipient, $attempt['host'], $attempt['port'], $attempt['secure']);
+            if ($smtpResult) {
+                error_log("[PHPMailer SUCCESS] Email delivered via SMTP ({$attempt['host']}:{$attempt['port']}) to {$recipient}");
+                return true;
+            }
+            error_log("[PHPMailer NOTICE] Attempt #{$idx} ({$attempt['host']}:{$attempt['port']}) failed: {$this->ErrorInfo}");
         }
 
-        error_log("[PHPMailer NOTICE] Direct SMTP failed ({$this->ErrorInfo}). Attempting fallback to native Hostinger mail()...");
+        error_log("[PHPMailer NOTICE] Direct SMTP failed across all endpoints. Attempting fallback to native Hostinger mail()...");
 
-        // Attempt 2: Fallback to PHP native mail()
+        // Attempt Fallback: Native Hostinger mail()
         $nativeResult = $this->sendViaNativeMail($recipient);
         if ($nativeResult) {
             error_log("[PHPMailer SUCCESS] Email dispatched via Hostinger native mail() to {$recipient}");
@@ -138,9 +148,13 @@ class PHPMailer {
         return false;
     }
 
-    private function sendViaSmtpSocket(string $to): bool {
-        $hostPrefix = ($this->Port === 465) ? 'ssl://' : '';
-        $socketTarget = $hostPrefix . $this->Host . ':' . $this->Port;
+    private function sendViaSmtpSocket(string $to, ?string $targetHost = null, ?int $targetPort = null, ?string $targetSecure = null): bool {
+        $host = $targetHost ?: $this->Host;
+        $port = $targetPort ?: $this->Port;
+        $secure = $targetSecure ?: $this->SMTPSecure;
+
+        $hostPrefix = ($secure === 'ssl' || $port === 465) ? 'ssl://' : '';
+        $socketTarget = $hostPrefix . $host . ':' . $port;
 
         $ctx = stream_context_create([
             'ssl' => [
@@ -175,7 +189,7 @@ class PHPMailer {
         try {
             $greeting = $read();
             if (substr($greeting, 0, 3) !== '220') {
-                $this->ErrorInfo = "Invalid SMTP greeting: {$greeting}";
+                $this->ErrorInfo = "Invalid SMTP greeting from {$socketTarget}: {$greeting}";
                 @fclose($socket);
                 return false;
             }
@@ -183,7 +197,7 @@ class PHPMailer {
             $serverDomain = $_SERVER['SERVER_NAME'] ?? 'amzdistributor.com';
             $cmd("EHLO {$serverDomain}");
 
-            if ($this->Port === 587) {
+            if ($port === 587 || $secure === 'tls') {
                 $tls = $cmd("STARTTLS");
                 if (substr($tls, 0, 3) === '220') {
                     @stream_socket_enable_crypto($socket, true, STREAM_CRYPTO_METHOD_TLS_CLIENT);
@@ -191,6 +205,7 @@ class PHPMailer {
                 }
             }
 
+            // Authenticate
             $auth = $cmd("AUTH LOGIN");
             if (substr($auth, 0, 3) !== '334') {
                 $this->ErrorInfo = "AUTH LOGIN refused: {$auth}";
@@ -212,6 +227,7 @@ class PHPMailer {
                 return false;
             }
 
+            // Envelope
             $mailFromResp = $cmd("MAIL FROM:<{$this->From}>");
             if (substr($mailFromResp, 0, 3) !== '250') {
                 $this->ErrorInfo = "MAIL FROM rejected: {$mailFromResp}";
@@ -233,13 +249,18 @@ class PHPMailer {
                 return false;
             }
 
+            // Message Construction with RFC 2047 standard encoded headers
             $boundary = "==_MIME_Boundary_" . md5(uniqid((string)time(), true));
-            $fromHeader = !empty($this->FromName) ? "=\"{$this->FromName}\" <{$this->From}>" : "<{$this->From}>";
+            $fromNameEncoded = !empty($this->FromName) ? "=?UTF-8?B?" . base64_encode($this->FromName) . "?=" : "";
+            $fromLine = !empty($fromNameEncoded) ? "{$fromNameEncoded} <{$this->From}>" : "<{$this->From}>";
+            $subjectEncoded = "=?UTF-8?B?" . base64_encode($this->Subject) . "?=";
+            $msgId = "<" . time() . "." . bin2hex(random_bytes(8)) . "@amzdistributor.com>";
             
-            $msg = "From: {$fromHeader}\r\n";
+            $msg = "From: {$fromLine}\r\n";
             $msg .= "To: <{$to}>\r\n";
-            $msg .= "Subject: {$this->Subject}\r\n";
+            $msg .= "Subject: {$subjectEncoded}\r\n";
             $msg .= "Date: " . date('r') . "\r\n";
+            $msg .= "Message-ID: {$msgId}\r\n";
             $msg .= "MIME-Version: 1.0\r\n";
             $msg .= "Content-Type: multipart/alternative; boundary=\"{$boundary}\"\r\n";
             $msg .= "X-Mailer: AMZDistributor Mailer\r\n\r\n";
@@ -276,17 +297,24 @@ class PHPMailer {
     }
 
     private function sendViaNativeMail(string $to): bool {
-        $fromHeader = !empty($this->FromName) ? "=\"{$this->FromName}\" <{$this->From}>" : "<{$this->From}>";
+        $fromNameEncoded = !empty($this->FromName) ? "=?UTF-8?B?" . base64_encode($this->FromName) . "?=" : "";
+        $fromLine = !empty($fromNameEncoded) ? "{$fromNameEncoded} <{$this->From}>" : "<{$this->From}>";
+        $subjectEncoded = "=?UTF-8?B?" . base64_encode($this->Subject) . "?=";
+        $msgId = "<" . time() . "." . bin2hex(random_bytes(8)) . "@amzdistributor.com>";
+
         $headers = [];
-        $headers[] = "From: {$fromHeader}";
-        $headers[] = "Reply-To: {$this->From}";
+        $headers[] = "From: {$fromLine}";
+        $headers[] = "Reply-To: <{$this->From}>";
+        $headers[] = "Return-Path: <{$this->From}>";
+        $headers[] = "Date: " . date('r');
+        $headers[] = "Message-ID: {$msgId}";
         $headers[] = "MIME-Version: 1.0";
         $headers[] = "Content-Type: text/html; charset=utf-8";
         $headers[] = "X-Mailer: PHP/" . phpversion();
 
         $additionalParams = "-f" . $this->From;
 
-        $sent = @mail($to, $this->Subject, $this->Body, implode("\r\n", $headers), $additionalParams);
+        $sent = @mail($to, $subjectEncoded, $this->Body, implode("\r\n", $headers), $additionalParams);
         if (!$sent) {
             $lastErr = error_get_last();
             $this->ErrorInfo = "PHP mail() returned false: " . json_encode($lastErr);

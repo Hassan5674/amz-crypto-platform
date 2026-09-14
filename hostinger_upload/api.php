@@ -707,9 +707,55 @@ if ($section === 'auth' && $action === 'login') {
             exit;
         }
 
-        // Automatically ensure user is ACTIVE and marked verified
+        // Check if user account is unverified. If so, generate fresh OTP, send email, and prompt verification!
+        $isUnverified = false;
+        if (isset($user['status']) && ($user['status'] === 'PENDING_VERIFICATION' || $user['status'] === 'PENDING')) {
+            $isUnverified = true;
+        }
+        if (empty($user['email_verified_at'])) {
+            $isUnverified = true;
+        }
+
+        if ($isUnverified) {
+            $targetEmail = $user['email'];
+            $targetName = !empty($user['name']) ? $user['name'] : (!empty($user['username']) ? $user['username'] : 'Member');
+
+            // Generate fresh 6-digit OTP code
+            $otpCode = sprintf("%06d", mt_rand(100000, 999999));
+            try {
+                $pdo->prepare("INSERT INTO email_verification_codes (user_id, email, code, expires_at) VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL 15 MINUTE))")
+                    ->execute([$user['id'], $targetEmail, $otpCode]);
+            } catch (\Exception $e) {
+                error_log("[LOGIN UNVERIFIED DB CODE ERROR] " . $e->getMessage());
+            }
+
+            // Dispatch real email via PHPMailer
+            $mailRes = dispatchVerificationEmailViaPhpMailer($targetEmail, $targetName, $otpCode);
+            error_log("[LOGIN UNVERIFIED EMAIL DISPATCH] Sent to {$targetEmail}: " . json_encode($mailRes));
+
+            http_response_code(403);
+            echo json_encode([
+                'success' => false,
+                'status' => 'pending_verification',
+                'requiresEmailVerification' => true,
+                'email' => $targetEmail,
+                'previewCode' => $otpCode,
+                'preview_verification_code' => $otpCode,
+                'message' => 'Your account is not verified yet. A fresh 6-digit verification code has been dispatched to your email address (' . htmlspecialchars($targetEmail) . '). Please verify your code to complete sign-in.',
+                'data' => [
+                    'status' => 'pending_verification',
+                    'requiresEmailVerification' => true,
+                    'email' => $targetEmail,
+                    'previewCode' => $otpCode,
+                    'preview_verification_code' => $otpCode
+                ]
+            ]);
+            exit;
+        }
+
+        // Verified user: Update last_login_at
         try {
-            $pdo->prepare("UPDATE users SET status = 'ACTIVE', email_verified_at = IFNULL(email_verified_at, NOW()), last_login_at = NOW() WHERE id = ?")->execute([$user['id']]);
+            $pdo->prepare("UPDATE users SET last_login_at = NOW() WHERE id = ?")->execute([$user['id']]);
         } catch (\Exception $e) {}
 
         // Issue token
@@ -1683,6 +1729,69 @@ if ($section === 'crypto' && $action === 'currencies') {
             ['code' => 'SOL', 'name' => 'Solana', 'network' => 'SOL', 'icon' => 'sol']
         ]
     ]);
+    exit;
+}
+
+// ------------------------------------------------------------------------------
+// ROUTE: /api/crypto/nowpayments/ipn and /api/crypto/webhook/nowpayments
+// ------------------------------------------------------------------------------
+if ($section === 'crypto' && ($action === 'nowpayments' || $action === 'webhook' || $action === 'ipn')) {
+    // GET Reachability Ping
+    if ($_SERVER['REQUEST_METHOD'] === 'GET') {
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode([
+            'status' => 'online',
+            'service' => 'NOWPayments IPN Callback Endpoint',
+            'endpoints' => [
+                'https://amzdistributor.com/api/crypto/nowpayments/ipn',
+                'https://amzdistributor.com/api/crypto/webhook/nowpayments'
+            ],
+            'ready' => true,
+            'timestamp' => date('c')
+        ]);
+        exit;
+    }
+
+    // POST Webhook Processing
+    header('Content-Type: application/json; charset=utf-8');
+    $rawPayload = file_get_contents('php://input');
+    $data = json_decode($rawPayload, true) ?: $_POST;
+
+    error_log("[NOWPAYMENTS IPN RECEIVED] " . $rawPayload);
+
+    $paymentId = $data['payment_id'] ?? null;
+    $paymentStatus = strtolower($data['payment_status'] ?? '');
+    $orderId = $data['order_id'] ?? null;
+    $priceAmount = floatval($data['price_amount'] ?? 0);
+    $payAmount = floatval($data['pay_amount'] ?? 0);
+    $actuallyPaid = floatval($data['actually_paid'] ?? 0);
+    $payCurrency = strtoupper($data['pay_currency'] ?? 'USDT');
+
+    if ($paymentStatus === 'finished' || $paymentStatus === 'confirmed') {
+        try {
+            $stmt = $pdo->prepare("SELECT * FROM deposits WHERE transaction_hash = ? OR tx_hash = ? OR id = ? OR reference_id = ? LIMIT 1");
+            $stmt->execute([$paymentId, $paymentId, $orderId, $orderId]);
+            $deposit = $stmt->fetch();
+
+            if ($deposit && $deposit['status'] !== 'COMPLETED') {
+                $creditUsd = floatval($deposit['amount'] ?: $priceAmount);
+                $userId = $deposit['user_id'];
+
+                $pdo->beginTransaction();
+                $pdo->prepare("UPDATE deposits SET status = 'COMPLETED', updated_at = NOW() WHERE id = ?")->execute([$deposit['id']]);
+                $pdo->prepare("UPDATE wallets SET available_balance = available_balance + ?, updated_at = NOW() WHERE user_id = ?")->execute([$creditUsd, $userId]);
+                $pdo->commit();
+                error_log("[NOWPAYMENTS IPN SUCCESS] Credited \${$creditUsd} to user #{$userId} for deposit #{$deposit['id']}");
+            }
+        } catch (\Exception $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            error_log("[NOWPAYMENTS IPN DB ERROR] " . $e->getMessage());
+        }
+    }
+
+    echo json_encode(['status' => 'ok', 'message' => 'IPN processed successfully']);
     exit;
 }
 
